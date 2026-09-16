@@ -41,7 +41,7 @@ for orientation in range(1,9):
         ref=D/f'reference-{orientation}.png';ImageOps.exif_transpose(source).save(ref)
     # ref PNG inherits EXIF but pixel orientation is already normalized by Pillow.
     assert render(p).tobytes()==render(ref).tobytes()
-    prepared=D/f'prepared-{orientation}.bmp';prepare(p,prepared);assert Image.open(prepared).size==(432,576)
+    prepared=D/f'prepared-{orientation}.bmp';prepare(p,prepared,overwrite=True);assert Image.open(prepared).size==(432,576)
 # Native photo asset must never add another header or mutate the UI area.
 render(Path('sdcard/photos/sample.png'),ui='ui').save('host-build/firmware-preview.png')
 print('Image compatibility passed: old/new sizes, JPG/PNG/BMP, alpha, EXIF 1-8, malformed/oversize input, cover/contain.')

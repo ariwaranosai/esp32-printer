@@ -40,10 +40,24 @@ idf.py -p /dev/cu.YOUR_DEVICE flash monitor
 
 ```sh
 python3 -m pip install -r tools/requirements.txt
-python3 tools/prepare_photo.py original.jpg sdcard/photos/my-photo.png --fit cover
-# 保留整张照片，不裁切
-python3 tools/prepare_photo.py original.jpg sdcard/photos/my-photo.png --fit contain
+# 单张：输出到指定文件，格式由扩展名决定
+python3 tools/prepare_photo.py original.jpg sdcard/photos/my-photo.png
+# 整个目录：当前层的图片，默认输出 PNG
+python3 tools/prepare_photo.py ./my-photos ./sdcard/photos
+# 包含子目录，转换为 24-bit RGB BMP，保留整张照片并留白
+python3 tools/prepare_photo.py ./my-photos ./sdcard/photos --recursive --format bmp --fit contain
+# 不指定输出位置：生成同级的 original_prepared / my-photos_prepared 目录
+python3 tools/prepare_photo.py original.jpg
 ```
+
+输出固定为 **432×576 RGB**；可用 `--format png|jpg|jpeg|bmp`。PNG 默认无损，JPEG 输出为基线 JPEG；六色转换由固件负责，不需要预先抖动。指定单个输出文件时，`--format` 必须与扩展名一致。
+
+- 默认 `--fit cover`：等比缩放后居中裁切；`--fit contain`：保留完整图片、白色留边，不拉伸。
+- 输入支持 Pillow 已安装的图片格式，例如 JPEG、PNG、BMP、WebP、TIFF、GIF；动画仅取第一帧。HEIC 等额外格式需要相应 Pillow 解码插件。
+- `--recursive` 会把子目录中的图片**平铺**到输出目录，因为固件只扫描照片目录当前层。重名输出自动添加 `-2`、`-3`，同时考虑大小写冲突。
+- 默认跳过已有输出，使用 `--overwrite` 才替换；始终拒绝覆盖原始输入文件。目录输入和输出不能是同一目录；输出目录可在输入目录内，扫描时会排除它。
+- 单张损坏不会中断其他文件；结束时显示成功、跳过、失败数量。有转换失败或没有找到图片时退出码为 1，参数错误为 2。
+- 输出直接复制到 SD 卡的 `/photos` 即可。脚本没有修改固件，已有烧录版本可直接使用。
 
 不要把带有时间/状态栏的旧“完整界面截图”当作照片导入，否则这些文字也会出现在照片框里；应使用原始照片。旧 Waveshare `/06_user_Foundation_img` 目录仍可读取（仅在 `/photos` 没有图片时回退），跳过 `sys_decode.bmp`。最多扫描 256 张，推荐文件名使用英文字母与数字。先关机再插拔 SD 卡。
 
