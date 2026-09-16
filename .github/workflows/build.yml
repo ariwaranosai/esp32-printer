@@ -1,0 +1,41 @@
+name: Firmware and image compatibility
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r tools/requirements.txt
+      - run: tests/run.sh
+        env:
+          CXX: clang++
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-preview
+          path: host-build/firmware-preview.png
+  firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ESP32-S3
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py build
+          idf.py merge-bin -o photopainter-merged.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photopainter-firmware
+          path: |
+            build/esp32_printer.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/flasher_args.json
+            build/photopainter-merged.bin
+            sdcard/

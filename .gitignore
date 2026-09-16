@@ -1,0 +1,10 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+/managed_components/
+/host-build/
+__pycache__/
+.DS_Store
+sdcard/config.json
+*.pem
+/photopainter-merged.bin

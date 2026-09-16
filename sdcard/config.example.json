@@ -1,0 +1,10 @@
+{
+  "wifi_ssid": "",
+  "wifi_password": "",
+  "timezone": "CST-8",
+  "ntp_server": "pool.ntp.org",
+  "refresh_seconds": 300,
+  "photo_fit": "cover",
+  "rotate_180": false,
+  "temperature_offset": 0.0
+}
