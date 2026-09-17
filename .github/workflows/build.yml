@@ -10,6 +10,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y libcjson-dev pkg-config
       - run: pip install -r tools/requirements.txt
       - run: tests/run.sh
         env:

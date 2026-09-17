@@ -9,6 +9,7 @@
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -119,16 +120,34 @@ static bool crc(const uint8_t *b, uint8_t expected) {
 void sample_sensors(frame::State &s, float offset) {
     uint8_t wake[] = {0x35, 0x17}, measure[] = {0x78, 0x66}, sleep[] = {0xb0, 0x98}, b[6];
     s.sensor_valid = false;
-    if (i2c_master_transmit(sht, wake, 2, 200) == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(2));
-        if (i2c_master_transmit(sht, measure, 2, 200) == ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            if (i2c_master_receive(sht, b, 6, 200) == ESP_OK && crc(b, b[2]) && crc(b + 3, b[5])) {
-                s.temperature = 175.f * ((b[0] << 8) | b[1]) / 65536.f - 45.f + offset;
-                s.humidity = 100.f * ((b[3] << 8) | b[4]) / 65536.f;
-                s.sensor_valid = true;
-            }
+    for (int attempt = 0; attempt < 2 && !s.sensor_valid; ++attempt) {
+        const char *stage = "wake";
+        auto e = i2c_master_transmit(sht, wake, 2, 200);
+        if (e == ESP_OK) {
+            // SHTC3 needs at least 240 us to wake. At 100 Hz,
+            // pdMS_TO_TICKS(2) is zero and does not provide this delay.
+            esp_rom_delay_us(1000);
+            stage = "measure";
+            e = i2c_master_transmit(sht, measure, 2, 200);
         }
+        if (e == ESP_OK) {
+            // Add a tick so the minimum wait is independent of tick phase.
+            vTaskDelay(pdMS_TO_TICKS(20) + 1);
+            stage = "read";
+            e = i2c_master_receive(sht, b, sizeof b, 200);
+        }
+        if (e != ESP_OK)
+            ESP_LOGW(TAG, "SHTC3 %s attempt %d: %s", stage, attempt + 1, esp_err_to_name(e));
+        else if (!crc(b, b[2]) || !crc(b + 3, b[5]))
+            ESP_LOGW(TAG, "SHTC3 CRC mismatch on attempt %d", attempt + 1);
+        else {
+            s.temperature = 175.f * ((b[0] << 8) | b[1]) / 65536.f - 45.f + offset;
+            s.humidity = 100.f * ((b[3] << 8) | b[4]) / 65536.f;
+            s.sensor_valid = true;
+            ESP_LOGI(TAG, "SHTC3: %.1f C, %.1f %% RH", s.temperature, s.humidity);
+        }
+        if (!s.sensor_valid)
+            vTaskDelay(pdMS_TO_TICKS(20) + 1);
     }
     i2c_master_transmit(sht, sleep, 2, 200);
     s.battery = -1;

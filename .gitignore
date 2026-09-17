@@ -1,4 +1,7 @@
 /build/
+/build-v5/
+/.idf-v5.5.2/
+/.venv-idf55/
 /sdkconfig
 /sdkconfig.old
 /managed_components/

@@ -1,10 +1,10 @@
 # ESP32 PhotoPainter 桌面相框
 
-为 **Waveshare ESP32-S3-PhotoPainter（7.3 英寸 E6 六色、800×480、16 MB Flash / 8 MB PSRAM）**制作的独立 ESP-IDF 固件。竖屏界面依次显示温湿度与 Wi-Fi/电池、时间日期、照片；显示面积为 96×160 mm。
+为 **Waveshare ESP32-S3-PhotoPainter（7.3 英寸 E6 六色、800×480、16 MB Flash / 8 MB PSRAM）**制作的独立 ESP-IDF 固件。竖屏顶部显示当地天气，中央显示照片，底部显示板载传感器的室内温湿度与采样时间；默认每小时更新。
 
-![由固件实际 C++ 渲染器生成的预览](docs/firmware-preview.png)
+![由固件实际 C++ 渲染器生成的预览，天气及读数为示例](docs/weather-firmware-preview.png)
 
-照片不是整屏背景：**画布 480×800，照片框 (24,192,432,576)**，其余区域专门绘制界面。传感器故障显示 `--`，时间未校准显示“等待校时”，不会把设计稿示例读数当作实测数据。
+照片不是整屏背景：**画布 480×800，照片框 (24,140,432,576)**。顶部室外天气与底部室内读数分开显示；传感器故障显示 `--`，时间未校准显示“等待校时”。
 
 ## 使用
 
@@ -18,7 +18,7 @@ idf.py build
 idf.py -p /dev/cu.YOUR_DEVICE flash monitor
 ```
 
-3. 上电后尝试连网校时，显示界面，进入深睡眠。默认每 **300 秒**重新采样和全屏刷新。屏幕刷新约 25 秒，会闪烁，不能作为逐秒时钟。
+3. 上电后尝试连网校时、获取天气，显示界面并进入深睡眠。默认每 **3600 秒**重新采样和全屏刷新。屏幕刷新约 25 秒，会闪烁；界面显示采样时间，不显示实时钟。
 4. **休眠时按 BOOT：下一张照片；按 KEY：刷新当前照片。** 刷新期间的按键不排队。照片按文件名排序，定时刷新保持当前照片。冷启动从第一张开始，深睡眠保留索引。
 
 没有检测到连接的实物硬件时，本项目只验证编译和主机渲染；烧录后的颜色、物理朝向、RTC、供电与休眠电流还需要实机验收。
@@ -69,7 +69,8 @@ python3 tools/prepare_photo.py original.jpg
   "wifi_password": "YOUR_PASSWORD",
   "timezone": "CST-8",
   "ntp_server": "pool.ntp.org",
-  "refresh_seconds": 300,
+  "refresh_seconds": 3600,
+  "weather_adcode": "",
   "photo_fit": "cover",
   "rotate_180": false,
   "temperature_offset": 0.0
@@ -77,12 +78,15 @@ python3 tools/prepare_photo.py original.jpg
 ```
 
 - `timezone`：POSIX TZ，默认中国标准时间 UTC+8。RTC 中保存 UTC，显示时转换。
-- `refresh_seconds`：60–86400；默认 300。包含屏幕刷新时间，但下次唤醒后的连接、解码仍会增加间隔，因此不是整点精确刷新。时间表示采样时刻，显示完成时已过去约 25 秒。
+- `refresh_seconds`：3600–86400；默认 3600。旧配置中小于 3600 的间隔自动提升为一小时，无需重新复制 SD 卡上的 Wi-Fi 配置。联网、解码仍会增加少量时间，因此不是整点精确刷新。
+- `weather_adcode`：六位行政区划代码，例如北京市 `"110000"`；不是邮政编码。填写时优先按该地区查询；留空按设备公网 IP 定位。IP 定位可能对应网络出口城市。
+- 天气使用 [UApiPro 天气接口](https://uapis.cn/docs/api-reference/get-misc-weather)，HTTPS 校验证书，仅读取基础天气字段。顶部显示接口的气象数据时间，底部显示室内传感器的采样时间。支持接口返回的绝对时间及“几分钟前发布”。
+- 天气请求失败时，在深睡眠保留的缓存上显示“未更新”和原始气象时间；缓存超过 24 小时或定位配置改变后不再使用。冷启动没有缓存时显示“暂无天气”。不影响本地照片与室内温湿度。
 - `photo_fit`：`cover` 或 `contain`。未知值回退 `cover`。
 - `rotate_180`：整块竖屏旋转 180 度，以适配摆放方向。
 - `temperature_offset`：摄氏度校准偏移，范围 -20～20；没有擅自应用官方示例固定的 -4°C 修正。
 - Wi-Fi 图标表示本轮采样时是否连网成功。联网结束后关闭无线并进入深睡眠；不是持续连接状态。
-- Wi-Fi 未配置/失败：仍显示照片，RTC/深睡眠时钟有效时继续显示时间。首次无有效时间时显示“等待校时”。
+- Wi-Fi 未配置/失败：仍显示照片和室内读数；天气按上述缓存策略显示。RTC/深睡眠时钟有效时保留采样时间，首次无有效时间时显示“等待校时”。
 - 无电池或读取失败显示 `--`。固件保留原有充电电流配置，不自行改动电池充电参数。
 - `config.json` 可能包含网络凭据，已被 `.gitignore` 排除；仅提交空白模板。修改后重启生效。
 
@@ -90,6 +94,7 @@ python3 tools/prepare_photo.py original.jpg
 
 ```sh
 python3 -m pip install -r tools/requirements.txt
+# Linux 主机天气解析测试需要 libcjson-dev 和 pkg-config
 ./tests/run.sh
 ```
 

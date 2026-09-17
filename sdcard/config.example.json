@@ -3,8 +3,9 @@
   "wifi_password": "",
   "timezone": "CST-8",
   "ntp_server": "pool.ntp.org",
-  "refresh_seconds": 300,
+  "refresh_seconds": 3600,
   "photo_fit": "cover",
   "rotate_180": false,
-  "temperature_offset": 0.0
+  "temperature_offset": 0.0,
+  "weather_adcode": ""
 }

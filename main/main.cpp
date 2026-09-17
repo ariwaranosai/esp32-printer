@@ -13,6 +13,8 @@
 #include "freertos/task.h"
 #include "hardware.h"
 #include "nvs_flash.h"
+#include "weather.h"
+#include "weather_client.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -25,7 +27,8 @@
 static const char *TAG = "photopainter";
 struct Config {
     std::string ssid, password, tz = "CST-8", ntp = "pool.ntp.org";
-    int refresh = 300;
+    std::string adcode;
+    int refresh = 3600;
     float offset = 0;
     bool flip = false;
     frame::Fit fit = frame::Fit::Cover;
@@ -56,10 +59,15 @@ static Config read_config() {
     str("wifi_password", c.password, 64);
     str("timezone", c.tz, 63);
     str("ntp_server", c.ntp, 127);
+    str("weather_adcode", c.adcode, 6);
+    if (!weather::valid_adcode(c.adcode)) {
+        ESP_LOGW(TAG, "Invalid weather_adcode; using IP location");
+        c.adcode.clear();
+    }
     auto v = cJSON_GetObjectItemCaseSensitive(json, "refresh_seconds");
     if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && v->valuedouble >= 60 &&
         v->valuedouble <= 86400)
-        c.refresh = int(v->valuedouble);
+        c.refresh = std::max(3600, int(v->valuedouble));
     v = cJSON_GetObjectItemCaseSensitive(json, "temperature_offset");
     if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && fabs(v->valuedouble) <= 20)
         c.offset = v->valuedouble;
@@ -78,7 +86,7 @@ static void wifi_event(void *, esp_event_base_t base, int32_t id, void *) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED)
         xEventGroupClearBits(wifi_events, 1);
 }
-static bool sync_time(const Config &c) {
+static bool sync_network(const Config &c, frame::Weather &weather) {
     if (c.ssid.empty())
         return false;
     wifi_events = xEventGroupCreate();
@@ -122,6 +130,7 @@ static bool sync_time(const Config &c) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         esp_sntp_stop();
+        fetch_weather(c.adcode, weather);
     }
     connected = (xEventGroupGetBits(wifi_events) & 1) != 0;
     esp_wifi_stop();
@@ -169,14 +178,18 @@ extern "C" void app_main() {
     hardware_init();
     bool sd = mount_sd();
     Config c = sd ? read_config() : Config{};
+    ESP_LOGI(TAG, "SD %s; refresh interval %d seconds", sd ? "mounted" : "unavailable", c.refresh);
     setenv("TZ", c.tz.c_str(), 1);
     tzset();
     // ESP32 RTC retains system time through deep sleep; only restore external RTC after cold boot.
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED && !rtc_restore())
         ESP_LOGW(TAG, "RTC unset: connect Wi-Fi to set clock");
     frame::State state;
-    state.wifi = sync_time(c);
+    state.weather = cached_weather(c.adcode);
+    state.refresh_seconds = c.refresh;
+    state.wifi = sync_network(c, state.weather);
     sample_sensors(state, c.offset);
+    time_t sampled = time(nullptr);
     frame::Canvas canvas;
     bool loaded = false;
     auto list = sd ? photos() : std::vector<std::string>{};
@@ -199,9 +212,11 @@ extern "C" void app_main() {
             ESP_LOGW(TAG, "Photo %s: %s", list[index].c_str(), error.c_str());
         }
     }
-    time_t now = time(nullptr);
+    time_t now = sampled;
     state.time_valid = now >= 1704067200;
     localtime_r(&now, &state.local);
+    ESP_LOGI(TAG, "Display time %02d:%02d:%02d; clock %s", state.local.tm_hour,
+             state.local.tm_min, state.local.tm_sec, state.time_valid ? "valid" : "unset");
     canvas.ui(state, loaded);
     int64_t started = esp_timer_get_time();
     err = display_frame(canvas, c.flip);

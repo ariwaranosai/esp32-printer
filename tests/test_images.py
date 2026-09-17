@@ -18,8 +18,8 @@ for size in [(800,480),(480,800),(432,576),(431,575),(1,1),(736,1325),(1350,1350
         for fit in ['cover','contain']:
             out=render(p,fit);assert out.size==(480,800)
             assert out.getpixel((240,480))==(255,0,0)
-            for xy in [(23,192),(456,192),(24,191),(24,768)]:assert out.getpixel(xy)==(255,255,255)
-            if fit=='cover':assert out.getpixel((24,192))==(255,0,0) and out.getpixel((455,767))==(255,0,0)
+            for xy in [(23,140),(456,140),(24,139),(24,716)]:assert out.getpixel(xy)==(255,255,255)
+            if fit=='cover':assert out.getpixel((24,140))==(255,0,0) and out.getpixel((455,715))==(255,0,0)
 # Large input rejected before decoding; malformed/truncated input must not crash.
 for size in [(4097,1),(2000,2000)]:
     p=D/f'oversize-{size[0]}.png';Image.new('RGB',size).save(p);render(p,ok=False)

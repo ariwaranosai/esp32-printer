@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
         }
         Canvas c;
         c.photo(im, std::string(argv[3]) == "contain" ? Fit::Contain : Fit::Cover);
-        if (std::string(argv[4]) == "ui") {
+        if (std::string(argv[4]) != "none") {
             State s;
             s.sensor_valid = s.wifi = s.time_valid = true;
             s.temperature = 24.6;
@@ -37,6 +37,21 @@ int main(int argc, char **argv) {
             s.local.tm_wday = 3;
             s.local.tm_hour = 14;
             s.local.tm_min = 30;
+            s.refresh_seconds = 3600;
+            s.weather.valid = std::string(argv[4]) != "missing";
+            s.weather.stale = std::string(argv[4]) == "stale";
+            s.weather.temperature = 26;
+            s.weather.icon = 101;
+            snprintf(s.weather.city, sizeof s.weather.city, "杭州");
+            snprintf(s.weather.description, sizeof s.weather.description, "多云");
+            snprintf(s.weather.wind, sizeof s.weather.wind, "东北风 2级");
+            snprintf(s.weather.report_time, sizeof s.weather.report_time, "2026-09-16 14:20:00");
+            if (std::string(argv[4]) == "long") {
+                snprintf(s.weather.city, sizeof s.weather.city, "阿拉善左旗特别长的城市名称");
+                snprintf(s.weather.description, sizeof s.weather.description, "雷阵雨伴有冰雹");
+                s.weather.temperature = -32;
+                s.weather.icon = 302;
+            }
             c.ui(s, true);
         }
         ppm(c, argv[2]);
@@ -81,7 +96,7 @@ int main(int argc, char **argv) {
     auto p = placement(800, 480, Fit::Cover);
     assert(p.source.x == 220 && p.source.w == 360 && p.source.h == 480);
     p = placement(800, 480, Fit::Contain);
-    assert(p.dest.w == 432 && p.dest.h == 259 && p.dest.y == 350);
+    assert(p.dest.w == 432 && p.dest.h == 259 && p.dest.y == PY + (PH-259)/2);
     Canvas c;
     c.pixel(-1, 0, Black);
     c.pixel(480, 0, Black);
@@ -122,5 +137,16 @@ int main(int argc, char **argv) {
                     if (x < PX || x >= PX + PW || y < PY || y >= PY + PH)
                         assert(c.pixel(x, y) == White);
         }
+    // Header/footer must not overwrite the photo, even with long network text.
+    c.clear();
+    c.rect(PX, PY, PW, PH, Red);
+    State state;
+    state.weather.valid = true;
+    snprintf(state.weather.city, sizeof state.weather.city, "阿拉善左旗特别长的城市名称");
+    snprintf(state.weather.description, sizeof state.weather.description, "雷阵雨伴有冰雹");
+    state.weather.temperature = -99;
+    c.ui(state, true);
+    for (int y = PY; y < PY+PH; ++y)
+        for (int x = PX; x < PX+PW; ++x) assert(c.pixel(x,y) == Red);
     puts("geometry, bounds, EXIF sampling and 192000-byte panel rotation passed");
 }

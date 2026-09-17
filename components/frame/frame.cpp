@@ -73,25 +73,44 @@ void Canvas::rect(int x, int y, int w, int h, uint8_t c) {
         for (int i = std::max(x, 0); i < std::min(x + w, W); ++i)
             pixel(i, j, c);
 }
+static uint32_t next_codepoint(const char *&t) {
+    uint32_t cp = static_cast<unsigned char>(*t++);
+    int count = cp >= 0xf0 && cp <= 0xf4 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc2 ? 1 : 0;
+    if (cp < 128) return cp;
+    if (!count || cp > 0xf4) return '?';
+    cp &= (1u << (6 - count)) - 1;
+    for (int i = 0; i < count; ++i) {
+        if ((static_cast<unsigned char>(*t) & 0xc0) != 0x80) return '?';
+        cp = (cp << 6) | (static_cast<unsigned char>(*t++) & 63);
+    }
+    return cp;
+}
+static const Glyph *glyph(uint32_t cp, int size) {
+    const auto end = std::end(glyphs);
+    auto found = std::lower_bound(std::begin(glyphs), end, std::pair<int, uint32_t>{size, cp},
+        [](const Glyph &g, const std::pair<int, uint32_t> &key) {
+            return g.size < key.first || (g.size == key.first && g.cp < key.second);
+        });
+    if (found != end && found->cp == cp && found->size == size) return found;
+    return cp == '?' ? nullptr : glyph('?', size);
+}
+void Canvas::text_fit(int x, int y, const char *t, int size, int width, bool right) {
+    std::string fitted;
+    int used = 0;
+    while (*t) {
+        const char *start = t;
+        const auto *g = glyph(next_codepoint(t), size);
+        if (!g) continue;
+        if (used + g->advance > width) break;
+        fitted.append(start, t - start);
+        used += g->advance;
+    }
+    text(right ? x + width - used : x, y, fitted.c_str(), size);
+}
 void Canvas::text(int x, int y, const char *t, int size) {
     while (*t) {
-        uint32_t cp = static_cast<unsigned char>(*t++);
-        if (cp >= 0xe0 && *t && t[1]) {
-            cp = ((cp & 15) << 12) | ((uint8_t(t[0]) & 63) << 6) | (uint8_t(t[1]) & 63);
-            t += 2;
-        } else if (cp >= 0xc0 && *t) {
-            cp = ((cp & 31) << 6) | (uint8_t(*t++) & 63);
-        }
-        const Glyph *found = nullptr;
-        for (const auto &g : glyphs)
-            if (g.cp == cp && g.size == size) {
-                found = &g;
-                break;
-            }
-        if (!found) {
-            x += size / 2;
-            continue;
-        }
+        const Glyph *found = glyph(next_codepoint(t), size);
+        if (!found) continue;
         const auto &g = *found;
         for (int j = 0; j < g.h; ++j)
             for (int i = 0; i < g.w; ++i) {
@@ -191,62 +210,100 @@ void Canvas::photo(const Image &im, Fit fit) {
     }
 }
 void Canvas::ui(const State &s, bool photo_ok) {
-    char b[80];
-    text(24, 20, "温度", 18);
-    if (s.sensor_valid)
-        snprintf(b, sizeof b, "%.1f°", s.temperature);
-    else
-        snprintf(b, sizeof b, "--°");
-    text(66, 18, b, 22);
-    text(156, 20, "湿度", 18);
-    if (s.sensor_valid)
-        snprintf(b, sizeof b, "%.0f%%", s.humidity);
-    else
-        snprintf(b, sizeof b, "--%%");
-    text(200, 18, b, 22);
-    // Concentric Wi-Fi arcs. Slash means disconnected at sampling time.
+    char b[160];
+    const auto &w = s.weather;
+    snprintf(b, sizeof b, "%s%s", w.valid ? w.city : "", w.valid ? " · 户外天气" : "户外天气");
+    text_fit(24, 22, b, 18, 330);
     for (int radius : {14, 9, 4})
         for (int deg = 220; deg <= 320; ++deg) {
             double a = deg * 3.14159265 / 180;
-            rect(336 + int(radius * cos(a)), 40 + int(radius * sin(a)), 2, 2);
+            rect(387 + int(radius * cos(a)), 39 + int(radius * sin(a)), 2, 2);
         }
-    rect(335, 39, 3, 3);
+    rect(386, 37, 3, 3);
     if (!s.wifi)
-        for (int i = 0; i < 26; ++i)
-            rect(323 + i, 20 + i, 2, 2);
-    rect(363, 23, 30, 2);
-    rect(363, 37, 30, 2);
-    rect(363, 23, 2, 16);
-    rect(391, 23, 2, 16);
-    rect(393, 28, 3, 6);
-    if (s.battery >= 0) {
-        rect(367, 27, std::clamp(s.battery, 0, 100) * 22 / 100, 8);
-        snprintf(b, sizeof b, "%d%%", s.battery);
-    } else
-        snprintf(b, sizeof b, "--");
-    text(403, 20, b, 18);
-    rect(24, 60, 432, 2);
-    rect(247, 82, 2, 63);
-    rect(24, 164, 432, 2);
-    if (s.time_valid) {
-        strftime(b, sizeof b, "%H:%M", &s.local);
-        text(24, 78, b, 65);
-        strftime(b, sizeof b, "%Y / %m / %d", &s.local);
-        text(272, 84, b, 23);
-        const char *days[] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
-        text(272, 120, days[std::clamp(s.local.tm_wday, 0, 6)], 23);
-        strftime(b, sizeof b, "更新于 %H:%M", &s.local);
-    } else {
-        text(24, 78, "--:--", 65);
-        text(272, 84, "等待校时", 23);
-        text(272, 120, "请配置网络", 23);
-        snprintf(b, sizeof b, "时间未同步");
+        for (int i = 0; i < 25; ++i) rect(375 + i, 19 + i, 2, 2);
+    rect(422, 24, 30, 2); rect(422, 36, 30, 2);
+    rect(422, 24, 2, 14); rect(450, 24, 2, 14); rect(452, 28, 3, 6);
+    if (s.battery >= 0)
+        rect(426, 28, std::clamp(s.battery, 0, 100) * 22 / 100, 6);
+    else
+        text(431, 24, "?", 16);
+
+    const bool sun = w.icon == 100 || w.icon == 101 || w.icon == 102 || w.icon == 103;
+    const bool night = w.icon >= 150 && w.icon <= 153;
+    const bool rain = w.icon >= 300 && w.icon < 400;
+    const bool snow = w.icon >= 400 && w.icon < 500;
+    const bool fog = w.icon >= 500 && w.icon < 600;
+    const bool cloud = (w.icon >= 101 && w.icon <= 104) || (night && w.icon != 150) || rain || snow;
+    auto circle = [&](int cx, int cy, int r, uint8_t fill) {
+        for (int y = -r; y <= r; ++y)
+            for (int x = -r; x <= r; ++x)
+                if (x*x + y*y <= r*r) pixel(cx+x, cy+y, fill);
+    };
+    if (w.valid && (sun || night)) {
+        circle(52, 69, 16, Black); circle(52, 69, 13, Yellow);
+        if (night) circle(59, 63, 12, White);
+        else for (int d = 0; d < 360; d += 45) {
+            double a = d * 3.14159265 / 180;
+            for (int r = 21; r <= 26; ++r)
+                rect(52 + int(r*cos(a)), 69 + int(r*sin(a)), 2, 2);
+        }
     }
-    text(24, 777, b, 14);
-    text(371, 777, "室内环境", 14);
+    if (w.valid && cloud) {
+        auto inside = [](int x, int y) {
+            return ((x-39)*(x-39)+(y-81)*(y-81) <= 11*11) ||
+                   ((x-52)*(x-52)+(y-76)*(y-76) <= 14*14) ||
+                   ((x-69)*(x-69)+(y-82)*(y-82) <= 10*10) ||
+                   (x >= 38 && x <= 69 && y >= 78 && y <= 91);
+        };
+        for (int y = 60; y <= 93; ++y)
+            for (int x = 25; x <= 81; ++x)
+                if (inside(x,y)) pixel(x,y, inside(x-2,y) && inside(x+2,y) &&
+                    inside(x,y-2) && inside(x,y+2) ? White : Black);
+        if (rain) for (int x : {38, 53, 68})
+            for (int j = 0; j < 7; ++j) rect(x-j/2, 96+j, 2, 1, Blue);
+        if (snow) for (int x : {38, 53, 68}) {
+            rect(x-3, 98, 7, 2); rect(x, 95, 2, 8);
+        }
+    }
+    if (w.valid && fog) for (int y : {65, 77, 89}) rect(28, y, 49, 2);
+    if (!w.valid || !(sun || night || cloud || fog)) text(42, 59, "?", 32);
+    text_fit(94, 58, w.valid ? w.description : "暂无天气", 32, 195);
+    if (w.valid) snprintf(b, sizeof b, "%.0f°C", w.temperature);
+    else snprintf(b, sizeof b, "--°C");
+    int size = w.valid && (w.temperature < -9.5 || w.temperature >= 99.5) ? 32 : 46;
+    text_fit(295, 51, b, size, 161, true);
+    text_fit(24, 107, w.valid && w.wind[0] ? w.wind : "风力暂无数据", 16, 216);
+    if (w.valid && w.stale) {
+        if (w.report_time[0]) snprintf(b, sizeof b, "未更新 %.5s %.5s", w.report_time+5, w.report_time+11);
+        else snprintf(b, sizeof b, "未更新 · 时间未知");
+    } else if (w.valid && w.report_time[0]) {
+        char today[11]{};
+        if (s.time_valid) strftime(today, sizeof today, "%Y-%m-%d", &s.local);
+        if (strncmp(today, w.report_time, 10) == 0)
+            snprintf(b, sizeof b, "气象 %.5s 更新", w.report_time+11);
+        else snprintf(b, sizeof b, "气象 %.5s %.5s", w.report_time+5, w.report_time+11);
+    } else snprintf(b, sizeof b, "%s", w.valid ? "气象时间未知" : "天气获取失败");
+    text_fit(244, 107, b, 16, 212, true);
+
+    text(24, 738, "室内", 18);
+    if (s.sensor_valid) snprintf(b, sizeof b, "%.1f°C", s.temperature);
+    else snprintf(b, sizeof b, "--°C");
+    text_fit(77, 735, b, 25, 118);
+    text(204, 738, "湿度", 18);
+    if (s.sensor_valid) snprintf(b, sizeof b, "%.0f%%", s.humidity);
+    else snprintf(b, sizeof b, "--%%");
+    text_fit(250, 735, b, 25, 112);
+    if (s.time_valid) strftime(b, sizeof b, "采样于 %H:%M", &s.local);
+    else snprintf(b, sizeof b, "等待校时");
+    text(24, 773, b, 16);
+    if (s.refresh_seconds == 3600) snprintf(b, sizeof b, "每小时更新");
+    else if (s.refresh_seconds % 3600 == 0) snprintf(b, sizeof b, "每%d小时更新", s.refresh_seconds/3600);
+    else snprintf(b, sizeof b, "每%d分钟更新", s.refresh_seconds/60);
+    text_fit(252, 773, b, 16, 204, true);
     if (!photo_ok) {
-        text(146, 445, "请放入照片", 23);
-        text(122, 483, "SD / photos", 23);
+        text(146, 410, "请放入照片", 18);
+        text(146, 449, "SD / photos", 18);
     }
 }
 std::vector<uint8_t> Canvas::panel(bool flip) const {
