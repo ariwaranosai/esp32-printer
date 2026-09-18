@@ -34,6 +34,7 @@ int main(int argc, char **argv) {
     content_length = body.size();
     assert(refresh_remote_photo(url, token, 10800, false));
     assert(authorization == "Bearer " + token);
+    assert(requested_layout == "compact");
     const auto first = cached_remote_photo(url);
     assert(!first.empty());
     assert(refresh_remote_photo(url, token, 10800, false) && requests == 1);

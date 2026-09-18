@@ -9,5 +9,11 @@
     "dbname": "zalbum",
     "user": "photopainter",
     "password": ""
+  },
+  "image_processing": {
+    "enabled": true,
+    "gamma": 0.96,
+    "contrast": 1.05,
+    "sharpness": 80
   }
 }

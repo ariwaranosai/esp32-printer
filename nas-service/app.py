@@ -2,6 +2,7 @@
 import hmac
 import io
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -13,10 +14,11 @@ import warnings
 from urllib.parse import urlsplit
 
 from flask import Flask, Response, jsonify, request
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageFilter, UnidentifiedImageError
 import requests
 
 SIZE = (432, 576)
+COMPACT_SIZE = (456, 656)
 MAX_BYTES = 32 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
@@ -52,26 +54,62 @@ def load_config(path):
         raise ValueError("api_token must contain at least 24 characters")
     if cfg.get("fit", "cover") not in ("cover", "contain"):
         raise ValueError("fit must be cover or contain")
+    processing_settings(cfg.get("image_processing"))
     return cfg
 
 
-def prepare_image(data, fit="cover"):
+def processing_settings(value=None):
+    settings = {"enabled": True, "gamma": 0.96, "contrast": 1.05, "sharpness": 80}
+    if value is None:
+        return settings
+    if not isinstance(value, dict) or set(value) - set(settings):
+        raise ValueError("invalid image_processing settings")
+    settings.update(value)
+    if type(settings["enabled"]) is not bool:
+        raise ValueError("image_processing.enabled must be boolean")
+    for key, low, high in (("gamma", 0.8, 1.2), ("contrast", 0.9, 1.2), ("sharpness", 0, 150)):
+        number = settings[key]
+        if type(number) not in (int, float) or not math.isfinite(number) or not low <= number <= high:
+            raise ValueError("invalid image_processing." + key)
+    return settings
+
+
+def enhance_photo(image, settings):
+    """Enhance at final pixel size; do not sharpen each RGB channel independently."""
+    if not settings["enabled"]:
+        return image
+    # Y-only processing avoids amplifying chroma noise. Keep pure endpoints intact.
+    luminance, cb, cr = image.convert("YCbCr").split()
+    curve = [max(0, min(255, round(((i / 255) ** settings["gamma"] * 255 - 128)
+                                  * settings["contrast"] + 128))) for i in range(256)]
+    curve[0], curve[255] = 0, 255
+    luminance = luminance.point(curve)
+    if settings["sharpness"]:
+        luminance = luminance.filter(ImageFilter.UnsharpMask(
+            radius=0.8, percent=round(settings["sharpness"]), threshold=3))
+    return Image.merge("YCbCr", (luminance, cb, cr)).convert("RGB")
+
+
+def prepare_image(data, fit="cover", processing=None, size=SIZE):
+    settings = processing_settings(processing)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(data)) as source:
-                if source.width < SIZE[0] and source.height < SIZE[1]:
+                if source.width < size[0] and source.height < size[1]:
                     raise ServiceError("source_image_too_small")
                 image = ImageOps.exif_transpose(source).convert("RGBA")
                 bg = Image.new("RGBA", image.size, "white")
                 bg.alpha_composite(image)
                 image = bg.convert("RGB")
                 if fit == "cover":
-                    image = ImageOps.fit(image, SIZE, method=Image.Resampling.LANCZOS)
+                    image = ImageOps.fit(image, size, method=Image.Resampling.LANCZOS)
+                    image = enhance_photo(image, settings)
                 else:
-                    scaled = ImageOps.contain(image, SIZE, method=Image.Resampling.LANCZOS)
-                    image = Image.new("RGB", SIZE, "white")
-                    image.paste(scaled, ((SIZE[0]-scaled.width)//2, (SIZE[1]-scaled.height)//2))
+                    scaled = ImageOps.contain(image, size, method=Image.Resampling.LANCZOS)
+                    scaled = enhance_photo(scaled, settings)
+                    image = Image.new("RGB", size, "white")
+                    image.paste(scaled, ((size[0]-scaled.width)//2, (size[1]-scaled.height)//2))
                 image.info.clear()
                 out = io.BytesIO()
                 image.save(out, "JPEG", quality=95, subsampling=0, progressive=False)
@@ -266,11 +304,13 @@ def create_app(config_path=None, client_factory=None):
             failure = None
             for item in candidates[:3]:
                 try:
-                    data = prepare_image(client.large_image(item), cfg.get("fit", "cover"))
+                    data = prepare_image(client.large_image(item), cfg.get("fit", "cover"),
+                                         cfg.get("image_processing"),
+                                         size=COMPACT_SIZE if request.headers.get("X-Photo-Layout") == "compact" else SIZE)
                     last_path = item["path"]
                     return Response(data, mimetype="image/jpeg", headers={
-                        "Cache-Control": "no-store", "X-Photo-Width": "432",
-                        "X-Photo-Height": "576", "Content-Disposition": 'inline; filename="photo.jpg"'})
+                        "Cache-Control": "no-store", "X-Photo-Width": "456" if request.headers.get("X-Photo-Layout") == "compact" else "432",
+                        "X-Photo-Height": "656" if request.headers.get("X-Photo-Layout") == "compact" else "576", "Content-Disposition": 'inline; filename="photo.jpg"'})
                 except ServiceError as error:
                     failure = error
             raise failure

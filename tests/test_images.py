@@ -18,7 +18,7 @@ for size in [(800,480),(480,800),(432,576),(431,575),(1,1),(736,1325),(1350,1350
         for fit in ['cover','contain']:
             out=render(p,fit);assert out.size==(480,800)
             assert out.getpixel((240,480))==(255,0,0)
-            for xy in [(23,140),(456,140),(24,139),(24,716)]:assert out.getpixel(xy)==(255,255,255)
+            for xy in [(11,132),(468,132),(12,131),(12,788)]:assert out.getpixel(xy)==(255,255,255)
             if fit=='cover':assert out.getpixel((24,140))==(255,0,0) and out.getpixel((455,715))==(255,0,0)
 # Large input rejected before decoding; malformed/truncated input must not crash.
 for size in [(4097,1),(2000,2000)]:
@@ -41,7 +41,7 @@ for orientation in range(1,9):
         ref=D/f'reference-{orientation}.png';ImageOps.exif_transpose(source).save(ref)
     # ref PNG inherits EXIF but pixel orientation is already normalized by Pillow.
     assert render(p).tobytes()==render(ref).tobytes()
-    prepared=D/f'prepared-{orientation}.bmp';prepare(p,prepared,overwrite=True);assert Image.open(prepared).size==(432,576)
+    prepared=D/f'prepared-{orientation}.bmp';prepare(p,prepared,overwrite=True);assert Image.open(prepared).size==(456,656)
 # Native photo asset must never add another header or mutate the UI area.
 render(Path('sdcard/photos/sample.png'),ui='ui').save('host-build/firmware-preview.png')
 print('Image compatibility passed: old/new sizes, JPG/PNG/BMP, alpha, EXIF 1-8, malformed/oversize input, cover/contain.')

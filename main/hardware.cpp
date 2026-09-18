@@ -25,6 +25,7 @@ static XPowersPMU power;
 static bool power_ok = false;
 static sdmmc_card_t *sd_card = nullptr;
 static const char *TAG = "hardware";
+void hardware_audio_sleep(i2c_master_bus_handle_t bus);
 static int read_power(uint8_t, uint8_t reg, uint8_t *data, uint8_t len) {
     return i2c_master_transmit_receive(pmic, &reg, 1, data, len, 200) == ESP_OK ? 0 : -1;
 }
@@ -84,6 +85,9 @@ void hardware_init() {
         gpio_hold_dis(pin);
     gpio_set_direction(GPIO_NUM_7, GPIO_MODE_OUTPUT); // Audio amplifier shutdown.
     gpio_set_level(GPIO_NUM_7, 0);
+    // Keep audio disabled throughout the entire wake cycle and deep sleep.
+    // No I2S clock is started. Standby failures must not abort photo-frame boot.
+    hardware_audio_sleep(handle);
     gpio_config_t io{};
     io.mode = GPIO_MODE_OUTPUT;
     io.pin_bit_mask = (1ULL << 8) | (1ULL << 9) | (1ULL << 12);

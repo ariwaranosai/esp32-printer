@@ -19,6 +19,7 @@
 #include "photo_policy.h"
 #include "photo_cache.h"
 #include "power_policy.h"
+#include "refresh_policy.h"
 #if __has_include("photo_service_private.h")
 #include "photo_service_private.h"
 #endif
@@ -41,7 +42,8 @@ struct Config {
     std::string adcode;
     std::string photo_url = PHOTO_SERVICE_URL, photo_token = PHOTO_SERVICE_TOKEN;
     int photo_refresh = 10800;
-    int refresh = 3600;
+    int refresh = 10800;
+    refresh_policy::QuietHours quiet;
     float offset = 0;
     bool flip = false;
     frame::Fit fit = frame::Fit::Cover;
@@ -112,7 +114,18 @@ static Config read_config() {
     auto v = cJSON_GetObjectItemCaseSensitive(json, "refresh_seconds");
     if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && v->valuedouble >= 60 &&
         v->valuedouble <= 86400)
-        c.refresh = std::max(3600, int(v->valuedouble));
+        c.refresh = std::max(10800, int(v->valuedouble));
+    v = cJSON_GetObjectItemCaseSensitive(json, "quiet_hours_enabled");
+    if (cJSON_IsBool(v)) c.quiet.enabled = cJSON_IsTrue(v);
+    auto hour = [&](const char *key, int &value) {
+        const auto *item = cJSON_GetObjectItemCaseSensitive(json, key);
+        if (cJSON_IsNumber(item) && std::isfinite(item->valuedouble) &&
+            item->valuedouble >= 0 && item->valuedouble <= 23 &&
+            std::floor(item->valuedouble) == item->valuedouble)
+            value = int(item->valuedouble);
+    };
+    hour("quiet_hours_start", c.quiet.start);
+    hour("quiet_hours_end", c.quiet.end);
     v = cJSON_GetObjectItemCaseSensitive(json, "temperature_offset");
     if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && fabs(v->valuedouble) <= 20)
         c.offset = v->valuedouble;
@@ -206,9 +219,13 @@ static bool sync_network(const Config &c, frame::Weather &weather, bool sd, bool
             }
             esp_sntp_stop();
         } else ESP_LOGI(TAG, "RTC clock retained; daily NTP sync not due");
-        fetch_weather(c.adcode, weather);
-        if (sd && !c.photo_url.empty())
-            refresh_remote_photo(c.photo_url, c.photo_token, c.photo_refresh, next_photo);
+        // NTP may have corrected an unknown clock into the quiet interval.
+        if (!refresh_policy::skip_refresh(time(nullptr), c.quiet, next_photo)) {
+            fetch_weather(c.adcode, weather);
+            if (sd && !c.photo_url.empty() &&
+                !refresh_policy::skip_refresh(time(nullptr), c.quiet, next_photo))
+                refresh_remote_photo(c.photo_url, c.photo_token, c.photo_refresh, next_photo);
+        }
     }
     connected = (xEventGroupGetBits(wifi_events) & 1) != 0;
     esp_wifi_stop();
@@ -246,6 +263,28 @@ static std::vector<std::string> photos() {
     std::sort(paths.begin(), paths.end());
     return paths;
 }
+static void sleep_until(time_t target, int64_t wake_started) {
+    const uint64_t delay = std::max(int64_t(30), int64_t(target) - int64_t(time(nullptr)));
+    ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(delay * 1000000ULL));
+    // Avoid a held button causing a wake-refresh loop.
+    for (int i = 0; i < 30 && (!gpio_get_level(GPIO_NUM_0) || !gpio_get_level(GPIO_NUM_4)); ++i)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    if (gpio_get_level(GPIO_NUM_0) && gpio_get_level(GPIO_NUM_4)) {
+        rtc_gpio_pullup_en(GPIO_NUM_0);
+        rtc_gpio_pulldown_dis(GPIO_NUM_0);
+        rtc_gpio_pullup_en(GPIO_NUM_4);
+        rtc_gpio_pulldown_dis(GPIO_NUM_4);
+        ESP_ERROR_CHECK(
+            esp_sleep_enable_ext1_wakeup_io((1ULL << 0) | (1ULL << 4), ESP_EXT1_WAKEUP_ANY_LOW));
+    }
+    hardware_prepare_sleep();
+    ESP_LOGI(TAG, "Awake %lld ms; sleeping %llu seconds",
+             (long long)((esp_timer_get_time()-wake_started)/1000), (unsigned long long)delay);
+    // Give USB console time to deliver the final diagnostics before disconnecting.
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(30) + 1);
+    esp_deep_sleep_start();
+}
 extern "C" void app_main() {
     const int64_t wake_started = esp_timer_get_time();
     auto err = nvs_flash_init();
@@ -264,10 +303,19 @@ extern "C" void app_main() {
     // ESP32 RTC retains system time through deep sleep; only restore external RTC after cold boot.
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED && !rtc_restore())
         ESP_LOGW(TAG, "RTC unset: connect Wi-Fi to set clock");
+    auto sleep_if_quiet = [&]() {
+        const auto now = time(nullptr);
+        if (!refresh_policy::skip_refresh(now, c.quiet, next_photo)) return;
+        ESP_LOGI(TAG, "Quiet hours %02d:00-%02d:00; keeping display until morning",
+                 c.quiet.start, c.quiet.end);
+        sleep_until(refresh_policy::next_wake(now, c.refresh, c.quiet), wake_started);
+    };
+    sleep_if_quiet(); // Skip Wi-Fi, sensors and panel when the clock is already valid.
     frame::State state;
     state.weather = cached_weather(c.adcode);
     state.refresh_seconds = c.refresh;
     state.wifi = sync_network(c, state.weather, sd, next_photo);
+    sleep_if_quiet(); // Recheck after NTP correction / a midnight boundary.
     sample_sensors(state, c.offset);
     time_t sampled = time(nullptr);
     frame::Canvas canvas;
@@ -312,30 +360,13 @@ extern "C" void app_main() {
     localtime_r(&now, &state.local);
     ESP_LOGI(TAG, "Display time %02d:%02d:%02d; clock %s", state.local.tm_hour,
              state.local.tm_min, state.local.tm_sec, state.time_valid ? "valid" : "unset");
+    sleep_if_quiet(); // Rendering may also cross the start of quiet hours.
     canvas.ui(state, loaded);
-    int64_t started = esp_timer_get_time();
     // Default mounting orientation is inverted relative to the panel's native scan order.
     ESP_LOGI(TAG, "Panel rotation: %d degrees", c.flip ? 0 : 180);
     err = display_frame(canvas, !c.flip);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Display failed; retry on next scheduled wake");
-    // Next refresh interval measured from the sampled time, excluding refresh duration.
-    int64_t elapsed = (esp_timer_get_time() - started) / 1000000;
-    uint64_t delay = std::max(int64_t(30), int64_t(c.refresh) - elapsed);
-    ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(delay * 1000000ULL));
-    // Avoid a held button causing a wake-refresh loop.
-    for (int i = 0; i < 30 && (!gpio_get_level(GPIO_NUM_0) || !gpio_get_level(GPIO_NUM_4)); ++i)
-        vTaskDelay(pdMS_TO_TICKS(100));
-    if (gpio_get_level(GPIO_NUM_0) && gpio_get_level(GPIO_NUM_4)) {
-        rtc_gpio_pullup_en(GPIO_NUM_0);
-        rtc_gpio_pulldown_dis(GPIO_NUM_0);
-        rtc_gpio_pullup_en(GPIO_NUM_4);
-        rtc_gpio_pulldown_dis(GPIO_NUM_4);
-        ESP_ERROR_CHECK(
-            esp_sleep_enable_ext1_wakeup_io((1ULL << 0) | (1ULL << 4), ESP_EXT1_WAKEUP_ANY_LOW));
-    }
-    hardware_prepare_sleep();
-    ESP_LOGI(TAG, "Awake %lld ms; sleeping %llu seconds",
-             (long long)((esp_timer_get_time()-wake_started)/1000), (unsigned long long)delay);
-    esp_deep_sleep_start();
+    // Include rendering and panel time in the interval, and skip quiet hours.
+    sleep_until(refresh_policy::next_wake(sampled, c.refresh, c.quiet), wake_started);
 }

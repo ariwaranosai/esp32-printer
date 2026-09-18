@@ -11,7 +11,7 @@ inline bool fail_commit = false, fail_open = false, complete = true;
 inline int status = 200, requests = 0;
 inline size_t cursor = 0;
 inline int64_t content_length = 0;
-inline std::string body, authorization;
+inline std::string body, authorization, requested_layout;
 struct esp_http_client_config_t {
     const char *url;
     void (*crt_bundle_attach)();
@@ -45,6 +45,7 @@ inline void *esp_http_client_init(const esp_http_client_config_t *c) {
 }
 inline int esp_http_client_set_header(void *, const char *name, const char *value) {
     if (std::string(name) == "Authorization") authorization = value;
+    if (std::string(name) == "X-Photo-Layout") requested_layout = value;
     return ESP_OK;
 }
 inline int esp_http_client_open(void *, int) { ++requests; cursor = 0; return fail_open ? -1 : ESP_OK; }

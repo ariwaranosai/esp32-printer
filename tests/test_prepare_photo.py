@@ -33,7 +33,7 @@ class ConversionTests(unittest.TestCase):
 
     def check_output(self, path, fmt=None):
         with Image.open(path) as im:
-            self.assertEqual(im.size, (432, 576))
+            self.assertEqual(im.size, (456, 656))
             self.assertEqual(im.mode, 'RGB')
             self.assertNotIn(274, im.getexif())
             if fmt:

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 namespace frame {
-constexpr int W = 480, H = 800, PX = 24, PY = 140, PW = 432, PH = 576;
+constexpr int W = 480, H = 800, PX = 12, PY = 132, PW = 456, PH = 656;
 enum Color : uint8_t { Black = 0, White = 1, Yellow = 2, Red = 3, Blue = 5, Green = 6 };
 enum class Fit { Cover, Contain };
 struct Rect {

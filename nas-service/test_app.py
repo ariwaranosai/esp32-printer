@@ -106,6 +106,16 @@ class Tests(unittest.TestCase):
         self.assertTrue(all(form['dest_fmt'] == ['large'] for form in downloads))
         self.assertTrue(all(cookie == self.cfg['cookie'] for _, _, cookie in calls))
 
+    def test_compact_layout_and_legacy_compatibility(self):
+        for layout, size in [("compact", (456, 656)), ("legacy", (432, 576))]:
+            headers = dict(self.headers, **{"X-Photo-Layout": layout})
+            response = self.client.get('/photo.jpg', headers=headers)
+            self.assertEqual(response.status_code, 200)
+            image = Image.open(io.BytesIO(response.data))
+            self.assertEqual(image.size, size)
+            self.assertEqual(response.headers['X-Photo-Width'], str(size[0]))
+            self.assertEqual(response.headers['X-Photo-Height'], str(size[1]))
+
     def test_auth_blocks_nas_access(self):
         self.assertEqual(self.client.get('/photo.jpg').status_code, 401)
         self.assertEqual(FakeNAS.calls, [])

@@ -8,7 +8,7 @@ namespace frame {
 namespace {
 constexpr uint64_t BASIS = 14695981039346656037ULL;
 // Bump magic when palette, dithering algorithm, or photo geometry changes.
-constexpr uint64_t MAGIC = 0x5048433433320001ULL;
+constexpr uint64_t MAGIC = 0x5048433435360004ULL;
 constexpr size_t PHOTO_BYTES = PW * PH / 2;
 uint64_t hash_bytes(const uint8_t *bytes, size_t size, uint64_t hash = BASIS) {
     for (size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ULL; }

@@ -170,7 +170,11 @@ void Canvas::photo(const Image &im, Fit fit) {
         if (y % 16 == 0)
             vTaskDelay(1);
 #endif
-        for (int x = 0; x < r.w; ++x) {
+        // Alternate direction to reduce the diagonal streaks of one-way diffusion.
+        // Mirror both same-row and next-row error weights on right-to-left rows.
+        const int direction = (y & 1) ? -1 : 1;
+        for (int step = 0; step < r.w; ++step) {
+            const int x = direction == 1 ? step : r.w - 1 - step;
             const double sx = s.x + std::clamp((x + .5) * s.w / r.w - .5, 0., double(s.w - 1));
             const double sy = s.y + std::clamp((y + .5) * s.h / r.h - .5, 0., double(s.h - 1));
             int x0 = int(sx), y0 = int(sy), x1 = std::min(x0 + 1, ow - 1),
@@ -199,10 +203,10 @@ void Canvas::photo(const Image &im, Fit fit) {
             pixel(r.x + x, r.y + y, code[best]);
             for (int c = 0; c < 3; ++c) {
                 float err = value[c] - pal[best][c];
-                row[(x + 2) * 3 + c] += err * 7 / 16;
-                next[x * 3 + c] += err * 3 / 16;
+                row[(x + 1 + direction) * 3 + c] += err * 7 / 16;
+                next[(x + 1 - direction) * 3 + c] += err * 3 / 16;
                 next[(x + 1) * 3 + c] += err * 5 / 16;
-                next[(x + 2) * 3 + c] += err / 16;
+                next[(x + 1 + direction) * 3 + c] += err / 16;
             }
         }
         row.swap(next);
@@ -213,24 +217,24 @@ void Canvas::ui(const State &s, bool photo_ok) {
     char b[160];
     const auto &w = s.weather;
     snprintf(b, sizeof b, "%s%s", w.valid ? w.city : "", w.valid ? " · 户外天气" : "户外天气");
-    text_fit(24, 22, b, 18, 286);
+    text_fit(16, 12, b, 18, 286);
     for (int radius : {14, 9, 4})
         for (int deg = 220; deg <= 320; ++deg) {
             double a = deg * 3.14159265 / 180;
-            rect(334 + int(radius * cos(a)), 39 + int(radius * sin(a)), 2, 2);
+            rect(334 + int(radius * cos(a)), 29 + int(radius * sin(a)), 2, 2);
         }
-    rect(333, 37, 3, 3);
+    rect(333, 27, 3, 3);
     if (!s.wifi)
-        for (int i = 0; i < 25; ++i) rect(322 + i, 19 + i, 2, 2);
+        for (int i = 0; i < 25; ++i) rect(322 + i, 9 + i, 2, 2);
     if (s.battery >= 0) snprintf(b, sizeof b, "%d%%", std::clamp(s.battery, 0, 100));
     else snprintf(b, sizeof b, "--%%");
-    text_fit(358, 22, b, 18, 56, true);
-    rect(422, 24, 30, 2); rect(422, 36, 30, 2);
-    rect(422, 24, 2, 14); rect(450, 24, 2, 14); rect(452, 28, 3, 6);
+    text_fit(358, 12, b, 18, 56, true);
+    rect(422, 14, 30, 2); rect(422, 26, 30, 2);
+    rect(422, 14, 2, 14); rect(450, 14, 2, 14); rect(452, 18, 3, 6);
     if (s.battery >= 0)
-        rect(426, 28, std::clamp(s.battery, 0, 100) * 22 / 100, 6);
+        rect(426, 18, std::clamp(s.battery, 0, 100) * 22 / 100, 6);
     else
-        text(431, 24, "?", 16);
+        text(431, 14, "?", 16);
 
     const bool sun = w.icon == 100 || w.icon == 101 || w.icon == 102 || w.icon == 103;
     const bool night = w.icon >= 150 && w.icon <= 153;
@@ -238,10 +242,17 @@ void Canvas::ui(const State &s, bool photo_ok) {
     const bool snow = w.icon >= 400 && w.icon < 500;
     const bool fog = w.icon >= 500 && w.icon < 600;
     const bool cloud = (w.icon >= 101 && w.icon <= 104) || (night && w.icon != 150) || rain || snow;
+    auto icon_pixel = [&](int x, int y, uint8_t color) {
+        pixel(16 + (x - 24) * 3 / 4, 38 + (y - 42) * 3 / 4, color);
+    };
+    auto icon_rect = [&](int x, int y, int width, int height, uint8_t color = Black) {
+        for (int iy = 0; iy < height; ++iy)
+            for (int ix = 0; ix < width; ++ix) icon_pixel(x + ix, y + iy, color);
+    };
     auto circle = [&](int cx, int cy, int r, uint8_t fill) {
         for (int y = -r; y <= r; ++y)
             for (int x = -r; x <= r; ++x)
-                if (x*x + y*y <= r*r) pixel(cx+x, cy+y, fill);
+                if (x*x + y*y <= r*r) icon_pixel(cx+x, cy+y, fill);
     };
     if (w.valid && (sun || night)) {
         circle(52, 69, 16, Black); circle(52, 69, 13, Yellow);
@@ -249,7 +260,7 @@ void Canvas::ui(const State &s, bool photo_ok) {
         else for (int d = 0; d < 360; d += 45) {
             double a = d * 3.14159265 / 180;
             for (int r = 21; r <= 26; ++r)
-                rect(52 + int(r*cos(a)), 69 + int(r*sin(a)), 2, 2);
+                icon_rect(52 + int(r*cos(a)), 69 + int(r*sin(a)), 2, 2);
         }
     }
     if (w.valid && cloud) {
@@ -261,22 +272,22 @@ void Canvas::ui(const State &s, bool photo_ok) {
         };
         for (int y = 60; y <= 93; ++y)
             for (int x = 25; x <= 81; ++x)
-                if (inside(x,y)) pixel(x,y, inside(x-2,y) && inside(x+2,y) &&
+                if (inside(x,y)) icon_pixel(x,y, inside(x-2,y) && inside(x+2,y) &&
                     inside(x,y-2) && inside(x,y+2) ? White : Black);
         if (rain) for (int x : {38, 53, 68})
-            for (int j = 0; j < 7; ++j) rect(x-j/2, 96+j, 2, 1, Blue);
+            for (int j = 0; j < 7; ++j) icon_rect(x-j/2, 96+j, 2, 1, Blue);
         if (snow) for (int x : {38, 53, 68}) {
-            rect(x-3, 98, 7, 2); rect(x, 95, 2, 8);
+            icon_rect(x-3, 98, 7, 2); icon_rect(x, 95, 2, 8);
         }
     }
-    if (w.valid && fog) for (int y : {65, 77, 89}) rect(28, y, 49, 2);
-    if (!w.valid || !(sun || night || cloud || fog)) text(42, 59, "?", 32);
-    text_fit(94, 58, w.valid ? w.description : "暂无天气", 32, 195);
+    if (w.valid && fog) for (int y : {65, 77, 89}) icon_rect(28, y, 49, 2);
+    if (!w.valid || !(sun || night || cloud || fog)) text(32, 42, "?", 32);
+    text_fit(80, 44, w.valid ? w.description : "暂无天气", 32, 195);
     if (w.valid) snprintf(b, sizeof b, "%.0f°C", w.temperature);
     else snprintf(b, sizeof b, "--°C");
     int size = w.valid && (w.temperature < -9.5 || w.temperature >= 99.5) ? 32 : 46;
-    text_fit(295, 51, b, size, 161, true);
-    text_fit(24, 107, w.valid && w.wind[0] ? w.wind : "风力暂无数据", 16, 216);
+    text_fit(295, 37, b, size, 161, true);
+    text_fit(16, 88, w.valid && w.wind[0] ? w.wind : "风力暂无数据", 16, 216);
     if (w.valid && w.stale) {
         if (w.report_time[0]) snprintf(b, sizeof b, "未更新 %.5s %.5s", w.report_time+5, w.report_time+11);
         else snprintf(b, sizeof b, "未更新 · 时间未知");
@@ -287,23 +298,19 @@ void Canvas::ui(const State &s, bool photo_ok) {
             snprintf(b, sizeof b, "气象 %.5s 更新", w.report_time+11);
         else snprintf(b, sizeof b, "气象 %.5s %.5s", w.report_time+5, w.report_time+11);
     } else snprintf(b, sizeof b, "%s", w.valid ? "气象时间未知" : "天气获取失败");
-    text_fit(244, 107, b, 16, 212, true);
+    text_fit(244, 88, b, 16, 212, true);
 
-    text(24, 738, "室内", 18);
-    if (s.sensor_valid) snprintf(b, sizeof b, "%.1f°C", s.temperature);
-    else snprintf(b, sizeof b, "--°C");
-    text_fit(77, 735, b, 25, 118);
-    text(204, 738, "湿度", 18);
-    if (s.sensor_valid) snprintf(b, sizeof b, "%.0f%%", s.humidity);
-    else snprintf(b, sizeof b, "--%%");
-    text_fit(250, 735, b, 25, 112);
-    if (s.time_valid) strftime(b, sizeof b, "采样于 %H:%M", &s.local);
-    else snprintf(b, sizeof b, "等待校时");
-    text(24, 773, b, 16);
-    if (s.refresh_seconds == 3600) snprintf(b, sizeof b, "每小时更新");
-    else if (s.refresh_seconds % 3600 == 0) snprintf(b, sizeof b, "每%d小时更新", s.refresh_seconds/3600);
-    else snprintf(b, sizeof b, "每%d分钟更新", s.refresh_seconds/60);
-    text_fit(252, 773, b, 16, 204, true);
+    if (s.sensor_valid)
+        snprintf(b, sizeof b, "室内 %.1f°C  湿度 %.0f%%", s.temperature, s.humidity);
+    else snprintf(b, sizeof b, "室内 --°C  湿度 --%%");
+    text_fit(16, 108, b, 16, 212);
+    char sampled[32];
+    if (s.time_valid) strftime(sampled, sizeof sampled, "采样于%H:%M", &s.local);
+    else snprintf(sampled, sizeof sampled, "等待校时");
+    if (s.refresh_seconds % 3600 == 0)
+        snprintf(b, sizeof b, "%s · 每%d小时更新", sampled, s.refresh_seconds / 3600);
+    else snprintf(b, sizeof b, "%s · 每%d分钟更新", sampled, s.refresh_seconds / 60);
+    text_fit(236, 108, b, 16, 228, true);
     if (!photo_ok) {
         text(146, 410, "请放入照片", 18);
         text(146, 449, "SD / photos", 18);

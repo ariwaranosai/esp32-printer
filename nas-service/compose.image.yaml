@@ -2,7 +2,7 @@
 # Set NAS_SERVICE_DIR to the absolute directory containing config/config.json.
 services:
   photopainter:
-    image: nkssai/esp32-printer-nas:20260918
+    image: nkssai/esp32-printer-nas:20260919-topinfo
     pull_policy: missing
     # Access the NAS PostgreSQL socket without a /dev/shm bind mount.
     ipc: host

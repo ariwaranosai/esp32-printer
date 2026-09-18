@@ -70,6 +70,7 @@ bool download(const std::string &url, const std::string &token, const std::strin
     const auto deadline = esp_timer_get_time() + 120000000LL;
     if (esp_http_client_set_header(client, "Authorization", auth.c_str()) == ESP_OK &&
         esp_http_client_set_header(client, "Accept", "image/jpeg") == ESP_OK &&
+        esp_http_client_set_header(client, "X-Photo-Layout", "compact") == ESP_OK &&
         esp_http_client_open(client, 0) == ESP_OK) {
         const auto length = esp_http_client_fetch_headers(client);
         const int status = esp_http_client_get_status_code(client);
@@ -105,12 +106,13 @@ bool download(const std::string &url, const std::string &token, const std::strin
         if (check) fclose(check);
         frame::Image image;
         std::string error;
-        ok = ok && frame::load_image(path, image, error) && image.w == frame::PW && image.h == frame::PH;
+        ok = ok && frame::load_image(path, image, error) && ((image.w == frame::PW && image.h == frame::PH) ||
+             (image.w == 432 && image.h == 576));
     }
     if (!ok) {
         remove(path.c_str());
         ESP_LOGW(TAG, "Download or image validation failed; keeping cached photo");
-    } else ESP_LOGI(TAG, "Verified JPEG: %u bytes, 432x576", static_cast<unsigned>(received));
+    } else ESP_LOGI(TAG, "Verified JPEG: %u bytes (native or legacy layout)", static_cast<unsigned>(received));
     return ok;
 }
 } // namespace

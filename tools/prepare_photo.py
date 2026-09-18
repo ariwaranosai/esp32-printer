@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert one image or a directory to PhotoPainter's 432x576 photo area."""
+"""Convert one image or a directory to PhotoPainter's 456x656 photo area."""
 import argparse
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ import tempfile
 
 from PIL import Image, ImageOps
 
-SIZE = (432, 576)
+SIZE = (456, 656)
 FORMATS = {'.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.bmp': 'BMP'}
 
 
@@ -132,7 +132,7 @@ def main(argv=None):
         else:
             converted += 1
             print(f'OK {source} -> {output}')
-    print(f'432x576 RGB | converted={converted} skipped={skipped} failed={failed}')
+    print(f'456x656 RGB | converted={converted} skipped={skipped} failed={failed}')
     return 1 if failed else 0
 
 

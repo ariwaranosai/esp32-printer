@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
             s.local.tm_wday = 3;
             s.local.tm_hour = 14;
             s.local.tm_min = 30;
-            s.refresh_seconds = 3600;
+            s.refresh_seconds = 10800;
             s.weather.valid = std::string(argv[4]) != "missing";
             s.weather.stale = std::string(argv[4]) == "stale";
             s.weather.temperature = 26;
@@ -97,9 +97,9 @@ int main(int argc, char **argv) {
         }
     }
     auto p = placement(800, 480, Fit::Cover);
-    assert(p.source.x == 220 && p.source.w == 360 && p.source.h == 480);
+    assert(p.source.x == 233 && p.source.w == 333 && p.source.h == 480);
     p = placement(800, 480, Fit::Contain);
-    assert(p.dest.w == 432 && p.dest.h == 259 && p.dest.y == PY + (PH-259)/2);
+    assert(p.dest.w == 456 && p.dest.h == 273 && p.dest.y == PY + (PH-273)/2);
     Canvas c;
     c.pixel(-1, 0, Black);
     c.pixel(480, 0, Black);

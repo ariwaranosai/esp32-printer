@@ -2,5 +2,11 @@
   "nas_url": "http://192.168.31.133:5055",
   "cookie": "",
   "api_token": "",
-  "fit": "cover"
+  "fit": "cover",
+  "image_processing": {
+    "enabled": true,
+    "gamma": 0.96,
+    "contrast": 1.05,
+    "sharpness": 80
+  }
 }

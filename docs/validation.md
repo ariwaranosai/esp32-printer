@@ -44,3 +44,51 @@
 - 修正版启动日志：SHTC3 28.9°C / 33.6% RH，照片六色缓存命中 156 ms，时钟有效，面板旋转 180°；没有再出现 PMIC/RTC 初始化错误。
 - 用户确认当前显示方向、运行及功能均无问题。尚未测量整板休眠电流或长期续航，不承诺具体省电比例。
 - NAS 密钥保存在被忽略的本地私有头文件；带密钥的本地二进制、SD 私有配置、设备日志和私人照片均不提交。
+
+
+## 2026-09-19 Audio codec software standby (awaiting hardware validation)
+
+- Added boot-time ES8311/ES7210 standby with bounded I2C operations and final register readback; ALDO3 stays enabled and GPIO7 keeps the amplifier off.
+- Focused C++ tests passed under AddressSanitizer/UndefinedBehaviorSanitizer: repeated wake/idempotence, ordered transient writes, read failure before changes, interrupted writes, ignored writes, readback failure and verification masks.
+- ESP-IDF 5.5.2 build passed. The existing local esp-15.2.0 toolchain override remains in use; IDF still warns that its supported version is esp-14.2.0_20251107.
+- No target USB serial port was present (only COM3/COM4). This firmware has not yet been flashed or verified on the device. RTC/SHTC3/SD/photo regression, cold boot/deep-sleep wake, and battery-side current measurements remain pending.
+
+
+## 2026-09-19 Three-hour refresh and quiet hours (awaiting hardware validation)
+
+- Automatic weather/sensor/display refresh defaults to 10800 seconds, matching the default NAS photo interval. Existing shorter `refresh_seconds` values are raised to 10800 without changing SD Wi-Fi credentials.
+- Quiet hours default to local 00:00 inclusive through 07:00 exclusive. A valid clock skips Wi-Fi, sensor sampling and panel refresh during that interval, scheduling the next wake at its end. A manual next-photo request bypasses the pause. Unknown clocks may connect for NTP; quiet hours are rechecked after sync and before panel refresh.
+- The ASan/UBSan scheduling tests passed: exact boundaries, overnight windows, year rollover, disabled/equal hours, manual override, invalid clock, and both DST transitions.
+- ESP-IDF 5.5.2 incremental build passed with the existing compiler override. Only COM3/COM4 were present; this combined firmware is not flashed yet, and actual power savings remain unmeasured.
+
+
+### Audio standby hardware check and readback correction
+
+- Initial combined firmware (2769056 bytes) was flashed on COM6 and esptool verified its hash. Boot logs reported ES8311 already in standby.
+- ES7210 initially logged a verification mismatch at 0x47 (0x3f read vs 0xff written). Full ES7210 datasheet revision 21 confirms reserved bits 7:6 at 0x47/0x49 and 7:5 at 0x48/0x4a. Verification now uses 0x3f/0x1f masks while retaining the vendor power-down write sequence.
+- Added a regression test modeling those reserved bits and checking that an enabled MICBIAS still triggers shutdown; ASan/UBSan tests passed. The corrected ESP-IDF 5.5.2 firmware is compiled; a repeat flash/hardware check is pending. A short USB-log drain before deep sleep preserves final diagnostics.
+
+- Corrected firmware subsequently flashed successfully: 2769072 bytes at 0x10000, esptool hash verified. Boot reported ELF SHA256 prefix `0a5903ba6` and ESP-IDF 5.5.2. USB disconnected after `app_main`; the captured boot log alone does not establish standby, RTC/SHTC3 or display validation. Manual-wake diagnostics remain pending.
+
+- Corrected firmware manual KEY wake was then observed: both `ES8311 standby already verified` and `ES7210 standby already verified`; long press detected; SD mounted with 10800-second refresh interval; NAS returned a verified 112024-byte 432x576 JPEG; SHTC3 read 29.9 C / 42.0% RH; valid display time 00:32:04 and 180-degree panel rotation. This confirms the manual override during quiet hours and intact sensor communication after audio standby. USB disconnected later; the final panel-completion/sleep log and the scheduled 07:00 wake were not captured. Battery-side current remains unmeasured.
+
+
+## 2026-09-19 Photo clarity processing (preview, not deployed)
+
+- NAS: final-size luminance gamma 0.96, contrast 1.05 and unsharp radius 0.8 / percent 80 / threshold 3; configurable and disableable. Existing JPEG geometry/quality/API are retained.
+- Firmware: serpentine Floyd-Steinberg diffusion with mirrored neighbor weights; photo-cache format version advanced to invalidate old renders. Panel palette and UI layout unchanged.
+- All 15 service tests passed, including byte-identical legacy output with enhancement disabled, edge contrast, neutral/flat images, invalid settings, white contain padding and existing API/Postgres tests (not the live-database suite).
+- `tests/run.sh` passed, including ASan/UBSan frame bounds/EXIF tests and old-cache invalidation. ESP-IDF 5.5.2 build passed using the existing compiler override.
+- Comparison uses `sdcard/photos/00-landscape.png`, identical cover crop, the saved pre-change renderer and current firmware renderer. Artifacts: `host-build/clarity/comparison.png`, before/after JPEGs and six-color PNGs. Preview is ideal RGB, not a photograph of the panel. No quantified perceptual improvement is claimed.
+- This build has not been flashed. NAS source changes have not been built/published as a new Docker image or deployed. Existing device/NAS retain the previous implementation until updated.
+
+- Clarity image built and five image-processing tests passed inside the non-root/read-only container. Published `nkssai/esp32-printer-nas:20260919-clarity`, digest `sha256:e53b641fb9ad1d37dd674404c1597e68589c881a91c18fefc2405a5a8da8b228`. NAS deployment is user-managed. Firmware flashing wait was cancelled at the user request before a new flash; the installed firmware is unchanged.
+
+
+## 2026-09-19 Approved top-information layout
+
+- Promoted the approved preview to firmware: 456x656 photo at (12,132), all information above it, 12px side/bottom margins. Cache magic advanced for new geometry. Local preparation tool uses new dimensions.
+- All host tests passed (ASan/UBSan layout bounds, UI/photo isolation, original and native JPEG client inputs, cache invalidation, image compatibility, eight preparation tests). Sixteen NAS unit tests passed; eight API tests also passed inside the final non-root read-only Docker image.
+- ESP-IDF 5.5.2 build passed with existing compiler override. Published `nkssai/esp32-printer-nas:20260919-topinfo`, digest `sha256:4f96006d9c8c1e2148b9e9d58e245f39d081e3aa2fa3fbaf6e3c6922151da965`. Container deployment is user-managed. Device flash pending wake.
+
+- Final top-information firmware flashed: 2769264 bytes at 0x10000, write hash verified. Manual wake fetched a verified 159198-byte JPEG, rendered in 8743ms, read SHTC3 28.5 C / 43.5% RH, and started panel refresh at valid local time 01:10:04 with 180-degree orientation. An independent authenticated request to the user-updated NAS returned HTTP 200 and 456x656 JPEG, confirming native-size service support. USB disconnected later; final display-completion/deep-sleep diagnostics were not captured.

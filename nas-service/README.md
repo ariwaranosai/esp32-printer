@@ -76,3 +76,46 @@ python -m flask --app app run --host 127.0.0.1 --port 8080
 ```
 
 本次仅开发服务，未修改或刷写 ESP32 固件；现有固件暂时不会自动请求此接口。
+
+
+## Photo clarity processing
+
+The service retains the 432x576 baseline JPEG contract (quality 95, no chroma
+subsampling). After EXIF orientation and Lanczos resizing, it adjusts luminance
+and applies a small-radius unsharp mask to luminance only. Chroma is not sharpened.
+Contain-mode white padding is added after enhancement. Defaults apply to existing
+configuration files without requiring new fields:
+
+```json
+"image_processing": {
+  "enabled": true,
+  "gamma": 0.96,
+  "contrast": 1.05,
+  "sharpness": 80
+}
+```
+
+- `enabled`: boolean; `false` restores the previous JPEG processing exactly.
+- `gamma`: 0.8–1.2; values below 1 lift midtones. Default 0.96.
+- `contrast`: 0.9–1.2; luminance contrast around mid-gray. Default 1.05.
+- `sharpness`: 0–150, unsharp percentage with fixed radius 0.8 pixels and threshold 3;
+  zero disables sharpening. Default 80. High values may produce halos.
+
+Invalid types, non-finite/out-of-range numbers and unknown processing keys reject
+the configuration instead of silently applying an extreme filter. Configuration
+is reloaded per request. The updated server image must be deployed for this feature;
+changing JSON on an older image does not add processing.
+
+The companion firmware uses serpentine Floyd–Steinberg error diffusion and bumps
+its processed-photo cache version. UI layout and panel colors remain unchanged.
+Palette colors have not been measured on the physical panel. Software previews
+use ideal RGB display colors; they cannot predict exact ink colors or prove a
+perceived sharpness improvement. Use the same photo for before/after hardware checks.
+
+Run service regressions: `python -m unittest test_app test_image_processing test_postgres`
+from this directory.
+
+
+## Top-information layout (20260919-topinfo)
+
+`GET /photo.jpg` with `X-Photo-Layout: compact` returns 456x656 JPEG; default requests still return 432x576 for existing devices. The firmware sends the header automatically and accepts both native and legacy dimensions during rollout. `X-Photo-Width` and `X-Photo-Height` reflect the selected dimensions. Run `python smoke_test.py --layout compact` to verify native output. Existing config.json needs no edits. Use image `nkssai/esp32-printer-nas:20260919-topinfo`.
