@@ -1,0 +1,32 @@
+# Pull the published Docker Hub image; no NAS build or image import required.
+# Set NAS_SERVICE_DIR to the absolute directory containing config/config.json.
+services:
+  photopainter:
+    image: nkssai/esp32-printer-nas:20260918
+    pull_policy: missing
+    # Access the NAS PostgreSQL socket without a /dev/shm bind mount.
+    ipc: host
+    ports:
+      - "${HTTP_PORT:-11280}:8080"
+    volumes:
+      - type: bind
+        source: ${NAS_SERVICE_DIR:?Set NAS_SERVICE_DIR}/config
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PHOTO_ROOT:?Set PHOTO_ROOT}
+        target: ${PHOTO_ROOT}
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

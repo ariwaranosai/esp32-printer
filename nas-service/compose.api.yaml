@@ -1,0 +1,17 @@
+services:
+  photopainter:
+    image: nkssai/esp32-printer-nas:20260918
+    pull_policy: missing
+    ports:
+      - "${HTTP_PORT:-11280}:8080"
+    volumes:
+      - ./config:/config:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

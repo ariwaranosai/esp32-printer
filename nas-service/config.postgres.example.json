@@ -1,0 +1,13 @@
+{
+  "source": "postgres",
+  "api_token": "",
+  "fit": "cover",
+  "photo_root": "/tmp/zfsv3/sata11/YOUR_NAS_ACCOUNT/data",
+  "postgres": {
+    "host": "/dev/shm",
+    "port": 2222,
+    "dbname": "zalbum",
+    "user": "photopainter",
+    "password": ""
+  }
+}

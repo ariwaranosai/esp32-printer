@@ -1,0 +1,27 @@
+# Default cookie-free deployment: docker compose up -d
+# Create the restricted DB view/role and verify socket authentication first.
+services:
+  photopainter:
+    image: nkssai/esp32-printer-nas:20260918
+    pull_policy: missing
+    # Access the NAS PostgreSQL socket without a /dev/shm bind mount.
+    ipc: host
+    ports:
+      - "${HTTP_PORT:-11280}:8080"
+    volumes:
+      - ./config:/config:ro
+      - type: bind
+        source: ${PHOTO_ROOT:?Set PHOTO_ROOT to the NAS photo directory}
+        target: ${PHOTO_ROOT}
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

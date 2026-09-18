@@ -11,3 +11,7 @@ __pycache__/
 sdcard/config.json
 *.pem
 /photopainter-merged.bin
+/nas-service/config/
+/nas-service/.venv/
+/nas-service/.env
+/nas-service/test-output/
