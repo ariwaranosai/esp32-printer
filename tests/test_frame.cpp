@@ -31,6 +31,9 @@ int main(int argc, char **argv) {
             s.temperature = 24.6;
             s.humidity = 58;
             s.battery = 82;
+            if (std::string(argv[4]) == "battery100") s.battery = 100;
+            if (std::string(argv[4]) == "battery0") s.battery = 0;
+            if (std::string(argv[4]) == "batteryunknown") s.battery = -1;
             s.local.tm_year = 126;
             s.local.tm_mon = 8;
             s.local.tm_mday = 16;
@@ -145,8 +148,14 @@ int main(int argc, char **argv) {
     snprintf(state.weather.city, sizeof state.weather.city, "阿拉善左旗特别长的城市名称");
     snprintf(state.weather.description, sizeof state.weather.description, "雷阵雨伴有冰雹");
     state.weather.temperature = -99;
-    c.ui(state, true);
-    for (int y = PY; y < PY+PH; ++y)
-        for (int x = PX; x < PX+PW; ++x) assert(c.pixel(x,y) == Red);
+    for (int battery : {-1, 0, 1, 82, 100, 101}) {
+        state.battery = battery;
+        c.ui(state, true);
+        for (int y = PY; y < PY+PH; ++y)
+            for (int x = PX; x < PX+PW; ++x) assert(c.pixel(x,y) == Red);
+        // Keep the outer margin clear for every percentage width, including 100%.
+        for (int y = 0; y < 45; ++y)
+            for (int x = 456; x < W; ++x) assert(c.pixel(x,y) == White);
+    }
     puts("geometry, bounds, EXIF sampling and 192000-byte panel rotation passed");
 }

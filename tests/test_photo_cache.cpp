@@ -1,0 +1,49 @@
+#include "photo_cache.h"
+#include "power_policy.h"
+#include <cassert>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <unistd.h>
+using namespace frame;
+int main(int argc, char **argv) {
+    assert(argc == 3);
+    char directory[] = "/tmp/photopainter-render-XXXXXX";
+    assert(mkdtemp(directory));
+    const auto path = std::string(directory)+"/cache.bin";
+    Canvas expected, actual;
+    std::string error;
+    bool hit = false;
+    assert(render_photo_cached(argv[1], Fit::Cover, path, expected, error, hit) && !hit);
+    assert(render_photo_cached(argv[1], Fit::Cover, path, actual, error, hit) && hit);
+    assert(expected.pixels == actual.pixels);
+    // Cache must not reintroduce yesterday's UI over fresh weather/battery values.
+    actual.rect(0, 0, W, PY, Red);
+    assert(render_photo_cached(argv[1], Fit::Cover, path, actual, error, hit) && hit);
+    assert(actual.pixel(0, 0) == Red);
+    assert(render_photo_cached(argv[1], Fit::Contain, path, actual, error, hit) && !hit);
+    assert(render_photo_cached(argv[2], Fit::Contain, path, actual, error, hit) && !hit);
+    {
+        std::fstream file(path, std::ios::binary|std::ios::in|std::ios::out);
+        file.seekp(64); file.put(static_cast<char>(0xff));
+    }
+    assert(render_photo_cached(argv[2], Fit::Contain, path, actual, error, hit) && !hit);
+    std::filesystem::resize_file(path, 50);
+    assert(render_photo_cached(argv[2], Fit::Contain, path, actual, error, hit) && !hit);
+    assert(render_photo_cached(argv[1], Fit::Cover, path+"/missing", actual, error, hit) && !hit);
+    assert(!render_photo_cached(path+"/missing.jpg", Fit::Cover, path, actual, error, hit));
+    for (int value = 0; value < 256; ++value) {
+        auto off = power_policy::peripheral_ldos(value, false);
+        auto on = power_policy::peripheral_ldos(value, true);
+        assert((off & 12) == 4 && (on & 12) == 12);
+        assert((off & ~12) == (value & ~12) && (on & ~12) == (value & ~12));
+    }
+    constexpr int64_t now = 1800000000;
+    assert(power_policy::ntp_due(now, 0));
+    assert(!power_policy::ntp_due(now+86399, now));
+    assert(power_policy::ntp_due(now+86400, now));
+    assert(power_policy::ntp_due(now-1, now));
+    assert(power_policy::ntp_due(0, now));
+    std::filesystem::remove_all(directory);
+    puts("render cache equality/invalidation/recovery, UI isolation, power masks and daily NTP passed");
+}

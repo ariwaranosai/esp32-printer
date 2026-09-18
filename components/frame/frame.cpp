@@ -213,15 +213,18 @@ void Canvas::ui(const State &s, bool photo_ok) {
     char b[160];
     const auto &w = s.weather;
     snprintf(b, sizeof b, "%s%s", w.valid ? w.city : "", w.valid ? " · 户外天气" : "户外天气");
-    text_fit(24, 22, b, 18, 330);
+    text_fit(24, 22, b, 18, 286);
     for (int radius : {14, 9, 4})
         for (int deg = 220; deg <= 320; ++deg) {
             double a = deg * 3.14159265 / 180;
-            rect(387 + int(radius * cos(a)), 39 + int(radius * sin(a)), 2, 2);
+            rect(334 + int(radius * cos(a)), 39 + int(radius * sin(a)), 2, 2);
         }
-    rect(386, 37, 3, 3);
+    rect(333, 37, 3, 3);
     if (!s.wifi)
-        for (int i = 0; i < 25; ++i) rect(375 + i, 19 + i, 2, 2);
+        for (int i = 0; i < 25; ++i) rect(322 + i, 19 + i, 2, 2);
+    if (s.battery >= 0) snprintf(b, sizeof b, "%d%%", std::clamp(s.battery, 0, 100));
+    else snprintf(b, sizeof b, "--%%");
+    text_fit(358, 22, b, 18, 56, true);
     rect(422, 24, 30, 2); rect(422, 36, 30, 2);
     rect(422, 24, 2, 14); rect(450, 24, 2, 14); rect(452, 28, 3, 6);
     if (s.battery >= 0)

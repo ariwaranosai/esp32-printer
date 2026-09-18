@@ -1,6 +1,7 @@
 // Panel sequence and pinout adapted from Waveshare PhotoPainter commit
 // a5e8f757ba0cafbb5586f07d3e83bda3184c0845. See third_party/Waveshare-MIT.txt.
 #include "hardware.h"
+#include "power_policy.h"
 #include "XPowersLib.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -22,6 +23,7 @@ static i2c_master_dev_handle_t sht, rtc, pmic;
 static spi_device_handle_t spi;
 static XPowersPMU power;
 static bool power_ok = false;
+static sdmmc_card_t *sd_card = nullptr;
 static const char *TAG = "hardware";
 static int read_power(uint8_t, uint8_t reg, uint8_t *data, uint8_t len) {
     return i2c_master_transmit_receive(pmic, &reg, 1, data, len, 200) == ESP_OK ? 0 : -1;
@@ -31,6 +33,17 @@ static int write_power(uint8_t, uint8_t reg, uint8_t *data, uint8_t len) {
     b[0] = reg;
     memcpy(b + 1, data, len);
     return i2c_master_transmit(pmic, b, len + 1, 200) == ESP_OK ? 0 : -1;
+}
+static bool peripheral_power(bool screen_on) {
+    // Official PhotoPainter schematic: ALDO3 = Audio_VCC, ALDO4 = EPD_VCC.
+    // Real board: ALDO3 must remain on for reliable shared I2C (RTC/SHTC3).
+    // Preserve DCDC1 (ESP32 + SD), RTCLDO, and all unrelated LDO enable bits.
+    uint8_t value = 0;
+    if (!power_ok || read_power(0, 0x90, &value, 1) != 0) return false;
+    value = power_policy::peripheral_ldos(value, screen_on);
+    if (write_power(0, 0x90, &value, 1) != 0) return false;
+    uint8_t actual = 0;
+    return read_power(0, 0x90, &actual, 1) == 0 && actual == value;
 }
 void hardware_init() {
     rtc_gpio_deinit(GPIO_NUM_0);
@@ -61,8 +74,16 @@ void hardware_init() {
         power.setALDO2Voltage(3300);
         power.setALDO3Voltage(3300);
         power.setALDO4Voltage(3300);
+        if (!peripheral_power(true)) ESP_LOGW(TAG, "Peripheral power-on verification failed");
+        vTaskDelay(pdMS_TO_TICKS(20));
     } else
         ESP_LOGW(TAG, "PMIC unavailable: battery shown as unknown");
+    // Release the output levels latched before the previous deep sleep.
+    gpio_deep_sleep_hold_dis();
+    for (auto pin : {GPIO_NUM_7, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_10, GPIO_NUM_11, GPIO_NUM_12})
+        gpio_hold_dis(pin);
+    gpio_set_direction(GPIO_NUM_7, GPIO_MODE_OUTPUT); // Audio amplifier shutdown.
+    gpio_set_level(GPIO_NUM_7, 0);
     gpio_config_t io{};
     io.mode = GPIO_MODE_OUTPUT;
     io.pin_bit_mask = (1ULL << 8) | (1ULL << 9) | (1ULL << 12);
@@ -102,11 +123,42 @@ bool mount_sd() {
     slot.d1 = GPIO_NUM_1;
     slot.d2 = GPIO_NUM_2;
     slot.d3 = GPIO_NUM_38;
-    sdmmc_card_t *card = nullptr;
-    auto e = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &m, &card);
-    if (e != ESP_OK)
+    auto e = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &m, &sd_card);
+    if (e != ESP_OK) {
+        sd_card = nullptr;
         ESP_LOGW(TAG, "SD mount: %s", esp_err_to_name(e));
+    }
     return e == ESP_OK;
+}
+void hardware_prepare_sleep() {
+    if (sd_card) {
+        auto err = esp_vfs_fat_sdcard_unmount("/sdcard", sd_card);
+        if (err != ESP_OK) ESP_LOGW(TAG, "SD unmount: %s", esp_err_to_name(err));
+        sd_card = nullptr;
+    }
+    // SD shares DCDC1 with the MCU. Stop the bus, but never switch that rail off.
+    for (auto pin : {GPIO_NUM_39, GPIO_NUM_41, GPIO_NUM_40, GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_38}) {
+        gpio_reset_pin(pin);
+        gpio_set_direction(pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(pin, GPIO_FLOATING);
+    }
+    if (spi) {
+        spi_bus_remove_device(spi);
+        spi = nullptr;
+        spi_bus_free(SPI3_HOST);
+    }
+    // Hold panel signals low to prevent back-powering the disabled EPD rail.
+    for (auto pin : {GPIO_NUM_7, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_10, GPIO_NUM_11, GPIO_NUM_12}) {
+        gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+        gpio_set_pull_mode(pin, GPIO_FLOATING);
+        gpio_set_level(pin, 0);
+        gpio_hold_en(pin);
+    }
+    gpio_set_pull_mode(GPIO_NUM_13, GPIO_FLOATING);
+    gpio_deep_sleep_hold_en();
+    if (peripheral_power(false))
+        ESP_LOGI(TAG, "Sleep power verified: EPD off; ALDO3/I2C, MCU/SD and RTC retained");
+    else ESP_LOGW(TAG, "Peripheral power-off verification failed");
 }
 static bool crc(const uint8_t *b, uint8_t expected) {
     uint8_t c = 255;

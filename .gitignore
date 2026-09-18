@@ -15,3 +15,4 @@ sdcard/config.json
 /nas-service/.venv/
 /nas-service/.env
 /nas-service/test-output/
+/main/photo_service_private.h

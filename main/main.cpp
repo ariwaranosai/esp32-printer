@@ -15,6 +15,17 @@
 #include "nvs_flash.h"
 #include "weather.h"
 #include "weather_client.h"
+#include "photo_client.h"
+#include "photo_policy.h"
+#include "photo_cache.h"
+#include "power_policy.h"
+#if __has_include("photo_service_private.h")
+#include "photo_service_private.h"
+#endif
+#ifndef PHOTO_SERVICE_URL
+#define PHOTO_SERVICE_URL ""
+#define PHOTO_SERVICE_TOKEN ""
+#endif
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -28,12 +39,40 @@ static const char *TAG = "photopainter";
 struct Config {
     std::string ssid, password, tz = "CST-8", ntp = "pool.ntp.org";
     std::string adcode;
+    std::string photo_url = PHOTO_SERVICE_URL, photo_token = PHOTO_SERVICE_TOKEN;
+    int photo_refresh = 10800;
     int refresh = 3600;
     float offset = 0;
     bool flip = false;
     frame::Fit fit = frame::Fit::Cover;
 };
 static RTC_DATA_ATTR unsigned photo_index = 0;
+static RTC_DATA_ATTR int64_t last_ntp_sync = 0;
+struct AccessPointCache {
+    uint64_t network = 0;
+    uint8_t bssid[6]{};
+    uint8_t channel = 0;
+};
+static RTC_DATA_ATTR AccessPointCache access_point;
+static bool next_photo_requested() {
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1) return false;
+    const uint64_t buttons = esp_sleep_get_ext1_wakeup_status();
+    if (buttons & (1ULL << 0)) return true; // Existing BOOT next-photo shortcut.
+    if (!(buttons & (1ULL << 4))) return false;
+    // Check before SD/network operations so their latency cannot swallow a long press.
+    // Deep-sleep boot adds roughly one second: hold KEY for about three seconds in total.
+    const int64_t deadline = esp_timer_get_time() + 2000000;
+    int released = 0;
+    while (esp_timer_get_time() < deadline) {
+        if (gpio_get_level(GPIO_NUM_4)) {
+            if (++released >= 3) return false; // 60 ms release debounce.
+        } else released = 0;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (released || gpio_get_level(GPIO_NUM_4)) return false;
+    ESP_LOGI(TAG, "KEY long press: force next photo once");
+    return true;
+}
 static Config read_config() {
     Config c;
     FILE *f = fopen("/sdcard/config.json", "rb");
@@ -60,6 +99,12 @@ static Config read_config() {
     str("timezone", c.tz, 63);
     str("ntp_server", c.ntp, 127);
     str("weather_adcode", c.adcode, 6);
+    str("photo_service_url", c.photo_url, 512);
+    str("photo_service_token", c.photo_token, 256);
+    if (!c.photo_url.empty() && !remote_photo::valid_settings(c.photo_url, c.photo_token)) {
+        ESP_LOGW(TAG, "Invalid photo service settings; using SD photos");
+        c.photo_url.clear();
+    }
     if (!weather::valid_adcode(c.adcode)) {
         ESP_LOGW(TAG, "Invalid weather_adcode; using IP location");
         c.adcode.clear();
@@ -71,6 +116,10 @@ static Config read_config() {
     v = cJSON_GetObjectItemCaseSensitive(json, "temperature_offset");
     if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && fabs(v->valuedouble) <= 20)
         c.offset = v->valuedouble;
+    v = cJSON_GetObjectItemCaseSensitive(json, "photo_refresh_seconds");
+    if (cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && v->valuedouble >= 3600 &&
+        v->valuedouble <= 604800)
+        c.photo_refresh = int(v->valuedouble);
     v = cJSON_GetObjectItemCaseSensitive(json, "rotate_180");
     c.flip = cJSON_IsTrue(v);
     v = cJSON_GetObjectItemCaseSensitive(json, "photo_fit");
@@ -86,7 +135,7 @@ static void wifi_event(void *, esp_event_base_t base, int32_t id, void *) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED)
         xEventGroupClearBits(wifi_events, 1);
 }
-static bool sync_network(const Config &c, frame::Weather &weather) {
+static bool sync_network(const Config &c, frame::Weather &weather, bool sd, bool next_photo) {
     if (c.ssid.empty())
         return false;
     wifi_events = xEventGroupCreate();
@@ -103,6 +152,14 @@ static bool sync_network(const Config &c, frame::Weather &weather) {
     wifi_config_t wifi{};
     memcpy(wifi.sta.ssid, c.ssid.data(), c.ssid.size());
     memcpy(wifi.sta.password, c.password.data(), c.password.size());
+    const auto network_id = remote_photo::source_id(c.ssid);
+    const bool known_ap = access_point.network == network_id && access_point.channel > 0 &&
+                          access_point.channel <= 14;
+    if (known_ap) {
+        wifi.sta.channel = access_point.channel;
+        memcpy(wifi.sta.bssid, access_point.bssid, 6);
+        wifi.sta.bssid_set = true;
+    }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     auto config_error = esp_wifi_set_config(WIFI_IF_STA, &wifi);
     if (config_error != ESP_OK) {
@@ -113,24 +170,45 @@ static bool sync_network(const Config &c, frame::Weather &weather) {
     }
     ESP_ERROR_CHECK(esp_wifi_start());
     bool connected = false;
-    for (int attempt = 0; attempt < 2 && !connected; ++attempt) {
+    esp_wifi_connect();
+    connected = xEventGroupWaitBits(wifi_events, 1, pdFALSE, pdFALSE,
+                                   pdMS_TO_TICKS(known_ap ? 5000 : 12000)) & 1;
+    if (!connected && known_ap) {
+        // AP/channel may have changed: fall back to a full scan once, within a bounded budget.
+        esp_wifi_stop();
+        xEventGroupClearBits(wifi_events, 1);
+        wifi.sta.bssid_set = false;
+        wifi.sta.channel = 0;
+        access_point = {};
+        esp_wifi_set_config(WIFI_IF_STA, &wifi);
+        esp_wifi_start();
         esp_wifi_connect();
-        connected = xEventGroupWaitBits(wifi_events, 1, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000)) & 1;
+        connected = xEventGroupWaitBits(wifi_events, 1, pdFALSE, pdFALSE, pdMS_TO_TICKS(12000)) & 1;
     }
     if (connected) {
-        esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-        esp_sntp_setservername(0, c.ntp.c_str());
-        esp_sntp_init();
-        for (int i = 0; i < 100; ++i) {
-            if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
-                if (!rtc_save())
-                    ESP_LOGW(TAG, "RTC write failed; system clock still valid");
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(100));
+        wifi_ap_record_t ap{};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            access_point.network = network_id;
+            access_point.channel = ap.primary;
+            memcpy(access_point.bssid, ap.bssid, 6);
         }
-        esp_sntp_stop();
+        if (power_policy::ntp_due(time(nullptr), last_ntp_sync)) {
+            esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+            esp_sntp_setservername(0, c.ntp.c_str());
+            esp_sntp_init();
+            for (int i = 0; i < 80; ++i) {
+                if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+                    last_ntp_sync = time(nullptr);
+                    if (!rtc_save()) ESP_LOGW(TAG, "RTC write failed; system clock still valid");
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            esp_sntp_stop();
+        } else ESP_LOGI(TAG, "RTC clock retained; daily NTP sync not due");
         fetch_weather(c.adcode, weather);
+        if (sd && !c.photo_url.empty())
+            refresh_remote_photo(c.photo_url, c.photo_token, c.photo_refresh, next_photo);
     }
     connected = (xEventGroupGetBits(wifi_events) & 1) != 0;
     esp_wifi_stop();
@@ -169,6 +247,7 @@ static std::vector<std::string> photos() {
     return paths;
 }
 extern "C" void app_main() {
+    const int64_t wake_started = esp_timer_get_time();
     auto err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGE(TAG, "NVS incompatible; back up settings then erase NVS before flashing");
@@ -176,6 +255,7 @@ extern "C" void app_main() {
     }
     ESP_ERROR_CHECK(err);
     hardware_init();
+    const bool next_photo = next_photo_requested();
     bool sd = mount_sd();
     Config c = sd ? read_config() : Config{};
     ESP_LOGI(TAG, "SD %s; refresh interval %d seconds", sd ? "mounted" : "unavailable", c.refresh);
@@ -187,24 +267,39 @@ extern "C" void app_main() {
     frame::State state;
     state.weather = cached_weather(c.adcode);
     state.refresh_seconds = c.refresh;
-    state.wifi = sync_network(c, state.weather);
+    state.wifi = sync_network(c, state.weather, sd, next_photo);
     sample_sensors(state, c.offset);
     time_t sampled = time(nullptr);
     frame::Canvas canvas;
     bool loaded = false;
-    auto list = sd ? photos() : std::vector<std::string>{};
-    if (!list.empty()) {
-        if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1 &&
-            (esp_sleep_get_ext1_wakeup_status() & (1ULL << 0)))
+    if (sd) mkdir("/sdcard/.nasphoto", 0775);
+    auto render = [&](const std::string &path, std::string &error) {
+        bool hit = false;
+        const auto start = esp_timer_get_time();
+        const bool ok = frame::render_photo_cached(path, c.fit, "/sdcard/.nasphoto/render.bin",
+                                                  canvas, error, hit);
+        if (ok) ESP_LOGI(TAG, "Photo %s in %lld ms", hit ? "cache hit" : "rendered",
+                        (long long)((esp_timer_get_time()-start)/1000));
+        return ok;
+    };
+    if (sd && !c.photo_url.empty()) {
+        const auto path = cached_remote_photo(c.photo_url);
+        std::string error;
+        if (!path.empty() && render(path, error)) {
+            loaded = true;
+            ESP_LOGI(TAG, "Displaying cached NAS photo");
+        }
+    }
+    auto list = sd && !loaded ? photos() : std::vector<std::string>{};
+    if (!loaded && !list.empty()) {
+        if (next_photo)
             ++photo_index;
         photo_index %= list.size();
         // Skip at most 8 bad files per wake to bound latency and power use.
         for (size_t i = 0; i < std::min(list.size(), size_t(8)); ++i) {
-            frame::Image photo;
             std::string error;
             size_t index = (photo_index + i) % list.size();
-            if (frame::load_image(list[index], photo, error)) {
-                canvas.photo(photo, c.fit);
+            if (render(list[index], error)) {
                 photo_index = index;
                 loaded = true;
                 break;
@@ -219,7 +314,9 @@ extern "C" void app_main() {
              state.local.tm_min, state.local.tm_sec, state.time_valid ? "valid" : "unset");
     canvas.ui(state, loaded);
     int64_t started = esp_timer_get_time();
-    err = display_frame(canvas, c.flip);
+    // Default mounting orientation is inverted relative to the panel's native scan order.
+    ESP_LOGI(TAG, "Panel rotation: %d degrees", c.flip ? 0 : 180);
+    err = display_frame(canvas, !c.flip);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Display failed; retry on next scheduled wake");
     // Next refresh interval measured from the sampled time, excluding refresh duration.
@@ -237,6 +334,8 @@ extern "C" void app_main() {
         ESP_ERROR_CHECK(
             esp_sleep_enable_ext1_wakeup_io((1ULL << 0) | (1ULL << 4), ESP_EXT1_WAKEUP_ANY_LOW));
     }
-    ESP_LOGI(TAG, "Sleeping %llu seconds", (unsigned long long)delay);
+    hardware_prepare_sleep();
+    ESP_LOGI(TAG, "Awake %lld ms; sleeping %llu seconds",
+             (long long)((esp_timer_get_time()-wake_started)/1000), (unsigned long long)delay);
     esp_deep_sleep_start();
 }
