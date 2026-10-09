@@ -115,6 +115,16 @@ perceived sharpness improvement. Use the same photo for before/after hardware ch
 Run service regressions: `python -m unittest test_app test_image_processing test_postgres`
 from this directory.
 
+## 图片处理内存
+
+普通 RGB 照片直接缩放，只有带透明信息的图片才生成 RGBA 白底合成缓冲区。
+EXIF 方向原地修正，缩放后立即关闭原图和中间像素缓冲区；异常路径也会释放。
+保留原有 Lanczos 缩放、JPEG 质量和透明图白底合成顺序，不降低输出质量。
+仍需解码完整原图，因此超大照片仍有较高内存峰值；进程内存不保证请求结束后立即回落。
+
+此优化需重新构建并部署镜像。现有 Compose 固定的 `20260919-topinfo` 镜像不会因
+本地源码修改而自动更新。
+
 
 ## Top-information layout (20260919-topinfo)
 

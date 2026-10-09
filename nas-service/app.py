@@ -1,5 +1,6 @@
 """ZSpace favourites to PhotoPainter JPEG. NAS credentials never leave this service."""
 import hmac
+from contextlib import ExitStack, closing
 import io
 import json
 import math
@@ -95,25 +96,49 @@ def prepare_image(data, fit="cover", processing=None, size=SIZE):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as source:
+            with ExitStack() as buffers, io.BytesIO(data) as raw:
+                def owned(image):
+                    return buffers.enter_context(closing(image))
+
+                source = owned(Image.open(raw))
                 if source.width < size[0] and source.height < size[1]:
                     raise ServiceError("source_image_too_small")
-                image = ImageOps.exif_transpose(source).convert("RGBA")
-                bg = Image.new("RGBA", image.size, "white")
-                bg.alpha_composite(image)
-                image = bg.convert("RGB")
-                if fit == "cover":
-                    image = ImageOps.fit(image, size, method=Image.Resampling.LANCZOS)
-                    image = enhance_photo(image, settings)
+                # Orient in place: exif_transpose otherwise copies even when
+                # the original needs no rotation. Keep full-resolution buffers
+                # only until resizing, including on failure paths.
+                ImageOps.exif_transpose(source, in_place=True)
+                if "A" in source.getbands() or "transparency" in source.info:
+                    rgba = owned(source.convert("RGBA"))
+                    source.close()
+                    bg = owned(Image.new("RGBA", rgba.size, "white"))
+                    bg.alpha_composite(rgba)
+                    rgba.close()
+                    image = owned(bg.convert("RGB"))
+                    bg.close()
+                elif source.mode == "RGB":
+                    image = source
                 else:
-                    scaled = ImageOps.contain(image, size, method=Image.Resampling.LANCZOS)
-                    scaled = enhance_photo(scaled, settings)
-                    image = Image.new("RGB", size, "white")
+                    image = owned(source.convert("RGB"))
+                    source.close()
+                if fit == "cover":
+                    scaled = owned(ImageOps.fit(image, size, method=Image.Resampling.LANCZOS))
+                else:
+                    scaled = owned(ImageOps.contain(image, size, method=Image.Resampling.LANCZOS))
+                image.close()
+                enhanced = owned(enhance_photo(scaled, settings))
+                if enhanced is not scaled:
+                    scaled.close()
+                if fit == "cover":
+                    image = enhanced
+                else:
+                    image = owned(Image.new("RGB", size, "white"))
+                    scaled = enhanced
                     image.paste(scaled, ((size[0]-scaled.width)//2, (size[1]-scaled.height)//2))
+                    scaled.close()
                 image.info.clear()
-                out = io.BytesIO()
-                image.save(out, "JPEG", quality=95, subsampling=0, progressive=False)
-                return out.getvalue()
+                with io.BytesIO() as out:
+                    image.save(out, "JPEG", quality=95, subsampling=0, progressive=False)
+                    return out.getvalue()
     except ServiceError:
         raise
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning):

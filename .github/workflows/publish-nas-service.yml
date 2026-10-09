@@ -1,0 +1,60 @@
+name: Build and publish NAS image
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Fixed Docker image version
+        required: true
+        default: 20261009-memory
+        type: string
+      publish:
+        description: Push to Docker Hub (requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets)
+        default: false
+        type: boolean
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: nkssai/esp32-printer-nas
+      IMAGE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r nas-service/requirements.txt
+      - name: Service regressions
+        working-directory: nas-service
+        run: python -m unittest test_app test_image_processing test_postgres
+      - name: Build amd64 image
+        run: docker build --platform linux/amd64 -t "$IMAGE_NAME:$IMAGE_TAG" nas-service
+      - name: Container health
+        run: |
+          docker run -d --name photopainter-release -p 18080:8080 "$IMAGE_NAME:$IMAGE_TAG"
+          trap 'docker rm -f photopainter-release' EXIT
+          for i in $(seq 1 20); do
+            if curl --fail http://127.0.0.1:18080/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker logs photopainter-release
+          exit 1
+      - name: Export image archive
+        run: docker save "$IMAGE_NAME:$IMAGE_TAG" | gzip > esp32-printer-nas-amd64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-printer-nas-amd64
+          path: esp32-printer-nas-amd64.tar.gz
+          compression-level: 0
+          retention-days: 7
+      - name: Push to Docker Hub
+        if: ${{ inputs.publish }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          test -n "$DOCKERHUB_USERNAME" && test -n "$DOCKERHUB_TOKEN"
+          trap 'docker logout' EXIT
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+          docker push "$IMAGE_NAME:$IMAGE_TAG"
