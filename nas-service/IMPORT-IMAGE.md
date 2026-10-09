@@ -1,16 +1,16 @@
 # 极空间使用 Docker Hub 镜像
 
-镜像名：`nkssai/esp32-printer-nas:20260919-topinfo`，架构：`linux/amd64`（适用于本次 Q4）。
+镜像名：`nkssai/esp32-printer-nas:20261009-memory`，架构：`linux/amd64`（适用于本次 Q4）。
 
 ## 1. 镜像来源
 
 Compose 会直接从 Docker Hub 拉取镜像，无需上传 tar 或在 NAS 构建。也可以提前拉取：
 
 ```sh
-sudo docker pull nkssai/esp32-printer-nas:20260919-topinfo
+sudo docker pull nkssai/esp32-printer-nas:20261009-memory
 ```
 
-仓库：https://hub.docker.com/r/nkssai/esp32-printer-nas 。Compose 固定使用日期版本；本次仅发布固定版本 `20260919-topinfo`，不要依赖 `latest` 获取此更新。配置中的密码和 token 不在镜像内。
+仓库：https://hub.docker.com/r/nkssai/esp32-printer-nas 。Compose 固定使用日期版本；本次仅发布固定版本 `20261009-memory`，不要依赖 `latest` 获取此更新。配置中的密码和 token 不在镜像内。
 
 ## 2. 配置文件
 
@@ -74,9 +74,14 @@ curl --fail -H "Authorization: Bearer YOUR_API_TOKEN" \
 
 ## 清晰度版本更新
 
-仅将现有 Compose 的 image 改为 `nkssai/esp32-printer-nas:20260919-topinfo` 并重新部署；保留原来的挂载、端口和数据库配置。未配置 image_processing 时默认启用轻度增强。此更新在 NAS 上即可生效；蛇形抖动仍需另行刷入新版固件。
+仅将现有 Compose 的 image 改为 `nkssai/esp32-printer-nas:20261009-memory` 并重新部署；保留原来的挂载、端口和数据库配置。未配置 image_processing 时默认启用轻度增强。此更新在 NAS 上即可生效；蛇形抖动仍需另行刷入新版固件。
 
 
 ## 信息置顶大图版本
 
 固件自动发送 `X-Photo-Layout: compact`，新版服务返回 456×656；不带此请求头时保留 432×576，兼容旧设备。无需修改现有 config.json。更新完成后可执行 `python smoke_test.py --layout compact` 验证新尺寸。
+
+
+## 内存优化版本更新
+
+将现有 Compose 的 image 改为 `nkssai/esp32-printer-nas:20261009-memory`，拉取并重新部署即可，无需修改配置或刷写固件。普通照片不再生成多份全尺寸 RGBA 缓冲区，原图和中间缓冲区在缩放后及时释放；图片质量、尺寸和接口保持兼容。

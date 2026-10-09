@@ -122,10 +122,10 @@ EXIF 方向原地修正，缩放后立即关闭原图和中间像素缓冲区；
 保留原有 Lanczos 缩放、JPEG 质量和透明图白底合成顺序，不降低输出质量。
 仍需解码完整原图，因此超大照片仍有较高内存峰值；进程内存不保证请求结束后立即回落。
 
-此优化需重新构建并部署镜像。现有 Compose 固定的 `20260919-topinfo` 镜像不会因
-本地源码修改而自动更新。
+内存优化镜像为 `nkssai/esp32-printer-nas:20261009-memory`。现有 NAS 部署需修改
+Compose 的 image 版本、拉取新镜像并重新部署；只修改本地源码不会更新容器。
 
 
 ## Top-information layout (20260919-topinfo)
 
-`GET /photo.jpg` with `X-Photo-Layout: compact` returns 456x656 JPEG; default requests still return 432x576 for existing devices. The firmware sends the header automatically and accepts both native and legacy dimensions during rollout. `X-Photo-Width` and `X-Photo-Height` reflect the selected dimensions. Run `python smoke_test.py --layout compact` to verify native output. Existing config.json needs no edits. Use image `nkssai/esp32-printer-nas:20260919-topinfo`.
+`GET /photo.jpg` with `X-Photo-Layout: compact` returns 456x656 JPEG; default requests still return 432x576 for existing devices. The firmware sends the header automatically and accepts both native and legacy dimensions during rollout. `X-Photo-Width` and `X-Photo-Height` reflect the selected dimensions. Run `python smoke_test.py --layout compact` to verify native output. Existing config.json needs no edits. Use image `nkssai/esp32-printer-nas:20261009-memory`.

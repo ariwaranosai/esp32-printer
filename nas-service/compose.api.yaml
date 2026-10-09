@@ -1,6 +1,6 @@
 services:
   photopainter:
-    image: nkssai/esp32-printer-nas:20260919-topinfo
+    image: nkssai/esp32-printer-nas:20261009-memory
     pull_policy: missing
     ports:
       - "${HTTP_PORT:-11280}:8080"
